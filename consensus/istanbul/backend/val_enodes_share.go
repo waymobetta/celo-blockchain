@@ -169,7 +169,7 @@ func (sb *Backend) sendValEnodesShareMsg() error {
 		return err
 	}
 
-	logger.Trace("Sending Istanbul Validator Enodes Share payload to proxy peer")
+	logger.Trace("Sending Istanbul Validator Enodes Share payload to proxy peer", "tag", "xkcd", "block", sb.core.CurrentView().Sequence)
 	if err := sb.proxyNode.peer.Send(istanbul.ValEnodesShareMsg, payload); err != nil {
 		logger.Error("Error sending Istanbul ValEnodesShare Message to proxy", "err", err)
 		return err
@@ -202,7 +202,7 @@ func (sb *Backend) handleValEnodesShareMsg(_ common.Address, _ consensus.Peer, p
 		return err
 	}
 
-	sb.logger.Trace("Received an Istanbul Validator Enodes Share message", "IstanbulMsg", msg.String(), "ValEnodesShareData", valEnodesShareData.String())
+	sb.logger.Trace("Received an Istanbul Validator Enodes Share message", "IstanbulMsg", msg.String(), "ValEnodesShareData", valEnodesShareData.String(), "tag", "xkcd", "block", sb.core.CurrentView().Sequence)
 
 	var upsertBatch []*vet.AddressEntry
 	for _, sharedValidatorEnode := range valEnodesShareData.ValEnodes {

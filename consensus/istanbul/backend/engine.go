@@ -588,7 +588,7 @@ func (sb *Backend) StartValidating(hasBadBlock func(common.Hash) bool,
 	sb.processBlock = processBlock
 	sb.validateState = validateState
 
-	sb.logger.Info("Starting istanbul.Engine validating")
+	sb.logger.Info("Starting istanbul.Engine validating", "tag", "xkcd")
 	if err := sb.core.Start(); err != nil {
 		return err
 	}
@@ -619,7 +619,7 @@ func (sb *Backend) StopValidating() error {
 	if !sb.coreStarted {
 		return istanbul.ErrStoppedEngine
 	}
-	sb.logger.Info("Stopping istanbul.Engine validating")
+	sb.logger.Info("Stopping istanbul.Engine validating", "tag", "xkcd", "block", sb.core.CurrentView().Sequence)
 	if err := sb.core.Stop(); err != nil {
 		return err
 	}
