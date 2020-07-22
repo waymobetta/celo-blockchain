@@ -202,7 +202,7 @@ func (sb *Backend) handleValEnodesShareMsg(_ common.Address, _ consensus.Peer, p
 		return err
 	}
 
-	sb.logger.Trace("Received an Istanbul Validator Enodes Share message", "IstanbulMsg", msg.String(), "ValEnodesShareData", valEnodesShareData.String(), "tag", "xkcd", "block", sb.core.CurrentView().Sequence)
+	sb.logger.Trace("Received an Istanbul Validator Enodes Share message", "IstanbulMsg", msg.String(), "ValEnodesShareData", valEnodesShareData.String(), "tag", "xkcd")
 
 	var upsertBatch []*vet.AddressEntry
 	for _, sharedValidatorEnode := range valEnodesShareData.ValEnodes {
