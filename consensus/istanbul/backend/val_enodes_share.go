@@ -179,7 +179,7 @@ func (sb *Backend) sendValEnodesShareMsg() error {
 }
 
 func (sb *Backend) handleValEnodesShareMsg(_ common.Address, _ consensus.Peer, payload []byte) error {
-	sb.logger.Debug("Handling an Istanbul Validator Enodes Share message")
+	sb.logger.Debug("Handling an Istanbul Validator Enodes Share message", "tag", "xkcd")
 
 	msg := new(istanbul.Message)
 	// Decode message

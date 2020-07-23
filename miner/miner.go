@@ -105,7 +105,7 @@ func (miner *Miner) update() {
 				if miner.Mining() {
 					miner.Stop()
 					atomic.StoreInt32(&miner.shouldStart, 1)
-					log.Info("Mining aborted due to sync")
+					log.Info("Mining aborted due to sync", "tag", "xkcd")
 				}
 			case downloader.DoneEvent, downloader.FailedEvent:
 				shouldStart := atomic.LoadInt32(&miner.shouldStart) == 1

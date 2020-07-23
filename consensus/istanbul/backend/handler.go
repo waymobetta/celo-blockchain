@@ -268,7 +268,7 @@ func (sb *Backend) UpdateMetricsForParentOfBlock(child *types.Block) {
 		sb.blocksElectedAndSignedMeter.Mark(1)
 	} else {
 		sb.blocksElectedButNotSignedMeter.Mark(1)
-		sb.logger.Warn("Elected but didn't sign block", "number", number-1, "address", sb.ValidatorAddress())
+		sb.logger.Warn("Elected but didn't sign block", "number", number-1, "address", sb.ValidatorAddress(), "tag", "xkcd")
 	}
 }
 
