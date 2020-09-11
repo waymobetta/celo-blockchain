@@ -21,18 +21,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/consensus/ethash"
-	"github.com/ethereum/go-ethereum/core"
-	"github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/ethereum/go-ethereum/core/state"
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
-	"github.com/ethereum/go-ethereum/eth/downloader"
-	"github.com/ethereum/go-ethereum/ethdb/memorydb"
-	"github.com/ethereum/go-ethereum/event"
-	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/trie"
+	"github.com/celo-org/celo-blockchain/common"
+	"github.com/celo-org/celo-blockchain/consensus"
+	mockEngine "github.com/celo-org/celo-blockchain/consensus/consensustest"
+	"github.com/celo-org/celo-blockchain/core"
+	"github.com/celo-org/celo-blockchain/core/rawdb"
+	"github.com/celo-org/celo-blockchain/core/state"
+	"github.com/celo-org/celo-blockchain/core/types"
+	"github.com/celo-org/celo-blockchain/core/vm"
+	"github.com/celo-org/celo-blockchain/eth/downloader"
+	"github.com/celo-org/celo-blockchain/ethdb/memorydb"
+	"github.com/celo-org/celo-blockchain/event"
+	"github.com/celo-org/celo-blockchain/params"
 )
 
 type mockBackend struct {
@@ -62,9 +62,7 @@ type testBlockChain struct {
 }
 
 func (bc *testBlockChain) CurrentBlock() *types.Block {
-	return types.NewBlock(&types.Header{
-		GasLimit: bc.gasLimit,
-	}, nil, nil, nil, new(trie.Trie))
+	return types.NewBlock(&types.Header{}, nil, nil, nil)
 }
 
 func (bc *testBlockChain) GetBlock(hash common.Hash, number uint64) *types.Block {
@@ -79,9 +77,21 @@ func (bc *testBlockChain) SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent)
 	return bc.chainHeadFeed.Subscribe(ch)
 }
 
+func (bc *testBlockChain) Engine() consensus.Engine {
+	return mockEngine.NewFaker()
+}
+
+func (bc *testBlockChain) GetHeader(common.Hash, uint64) *types.Header {
+	return nil
+}
+
+func (bc *testBlockChain) GetVMConfig() *vm.Config {
+	return nil
+}
+
 func TestMiner(t *testing.T) {
 	miner, mux := createMiner(t)
-	miner.Start(common.HexToAddress("0x12345"))
+	miner.Start(common.HexToAddress("0x12345"), common.HexToAddress("0x67890"))
 	waitForMiningState(t, miner, true)
 	// Start the downloader
 	mux.Post(downloader.StartEvent{})
@@ -97,10 +107,23 @@ func TestMiner(t *testing.T) {
 	waitForMiningState(t, miner, true)
 }
 
+func TestStartWhileDownload(t *testing.T) {
+	miner, mux := createMiner(t)
+	waitForMiningState(t, miner, false)
+	miner.Start(common.HexToAddress("0x12345"), common.HexToAddress("0x67890"))
+	waitForMiningState(t, miner, true)
+	// Stop the downloader and wait for the update loop to run
+	mux.Post(downloader.StartEvent{})
+	waitForMiningState(t, miner, false)
+	// Starting the miner after the downloader should not work
+	miner.Start(common.HexToAddress("0x12345"), common.HexToAddress("0x67890"))
+	waitForMiningState(t, miner, false)
+}
+
 func TestStartStopMiner(t *testing.T) {
 	miner, _ := createMiner(t)
 	waitForMiningState(t, miner, false)
-	miner.Start(common.HexToAddress("0x12345"))
+	miner.Start(common.HexToAddress("0x12345"), common.HexToAddress("0x67890"))
 	waitForMiningState(t, miner, true)
 	miner.Stop()
 	waitForMiningState(t, miner, false)
@@ -109,7 +132,7 @@ func TestStartStopMiner(t *testing.T) {
 func TestCloseMiner(t *testing.T) {
 	miner, _ := createMiner(t)
 	waitForMiningState(t, miner, false)
-	miner.Start(common.HexToAddress("0x12345"))
+	miner.Start(common.HexToAddress("0x12345"), common.HexToAddress("0x67890"))
 	waitForMiningState(t, miner, true)
 	// Terminate the miner and wait for the update loop to run
 	miner.Close()
@@ -135,7 +158,7 @@ func waitForMiningState(t *testing.T, m *Miner, mining bool) {
 func createMiner(t *testing.T) (*Miner, *event.TypeMux) {
 	// Create Ethash config
 	config := Config{
-		Etherbase: common.HexToAddress("123456789"),
+		Validator: common.HexToAddress("123456789"),
 	}
 	// Create chainConfig
 	memdb := memorydb.New()
@@ -148,8 +171,7 @@ func createMiner(t *testing.T) (*Miner, *event.TypeMux) {
 	// Create event Mux
 	mux := new(event.TypeMux)
 	// Create consensus engine
-	engine := ethash.New(ethash.Config{}, []string{}, false)
-	engine.SetThreads(-1)
+	engine := mockEngine.NewFaker()
 	// Create isLocalBlock
 	isLocalBlock := func(block *types.Block) bool {
 		return true
@@ -166,5 +188,5 @@ func createMiner(t *testing.T) (*Miner, *event.TypeMux) {
 	pool := core.NewTxPool(testTxPoolConfig, params.TestChainConfig, blockchain)
 	backend := NewMockBackend(bc, pool)
 	// Create Miner
-	return New(backend, &config, chainConfig, mux, engine, isLocalBlock), mux
+	return New(backend, &config, chainConfig, mux, engine, isLocalBlock, nil), mux
 }

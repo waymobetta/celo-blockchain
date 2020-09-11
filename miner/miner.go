@@ -22,7 +22,6 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/celo-org/celo-blockchain/accounts"
 	"github.com/celo-org/celo-blockchain/common"
 	"github.com/celo-org/celo-blockchain/common/hexutil"
 	"github.com/celo-org/celo-blockchain/consensus"
@@ -40,7 +39,6 @@ import (
 
 // Backend wraps all methods required for mining.
 type Backend interface {
-	AccountManager() *accounts.Manager
 	BlockChain() *core.BlockChain
 	TxPool() *core.TxPool
 }
@@ -98,6 +96,7 @@ func (miner *Miner) update() {
 	defer events.Unsubscribe()
 
 	shouldStart := false
+	canStart := true
 	for {
 		select {
 		case ev := <-events.Chan():
@@ -108,6 +107,7 @@ func (miner *Miner) update() {
 			case downloader.StartEvent:
 				wasMining := miner.Mining()
 				miner.worker.stop()
+				canStart = false
 				if wasMining {
 					// Resume mining after sync was finished
 					shouldStart = true
@@ -146,15 +146,18 @@ func (miner *Miner) update() {
 						}
 					}
 				}
+				canStart = true
 				if shouldStart {
-					miner.SetValidator(miner.validator)
-					miner.SetTxFeeRecipient(miner.txFeeRecipient)
 					miner.worker.start()
 				}
 			}
 		case <-miner.startCh:
-			miner.worker.start()
+			if canStart {
+				miner.worker.start()
+			}
+			shouldStart = true
 		case <-miner.stopCh:
+			shouldStart = false
 			miner.worker.stop()
 		case <-miner.exitCh:
 			miner.worker.close()
