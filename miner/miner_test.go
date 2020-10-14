@@ -202,6 +202,28 @@ func TestCloseMiner(t *testing.T) {
 	waitForMiningState(t, miner, false)
 }
 
+// TestMinerSetEtherbase checks that etherbase becomes set even if mining isn't
+// possible at the moment
+func TestMinerSetEtherbase(t *testing.T) {
+	miner, mux := createMiner(t)
+	// Start with a 'bad' mining address
+	miner.Start(common.HexToAddress("0xdead"), common.HexToAddress("0x67890"))
+	waitForMiningState(t, miner, true)
+	// Start the downloader
+	mux.Post(downloader.StartEvent{})
+	waitForMiningState(t, miner, false)
+	// Now user tries to configure proper mining address
+	miner.Start(common.HexToAddress("0x1337"), common.HexToAddress("0x67890"))
+	// Stop the downloader and wait for the update loop to run
+	mux.Post(downloader.DoneEvent{})
+
+	waitForMiningState(t, miner, true)
+	// The miner should now be using the good address
+	if got, exp := miner.validator, common.HexToAddress("0x1337"); got != exp {
+		t.Fatalf("Wrong validator address, got %x expected %x", got, exp)
+	}
+}
+
 // waitForMiningState waits until either
 // * the desired mining state was reached
 // * a timeout was reached which fails the test
