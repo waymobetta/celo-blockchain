@@ -184,7 +184,7 @@ func (c *core) handleMsg(payload []byte) error {
 }
 
 func (c *core) handleCheckedMsg(msg *istanbul.Message, src istanbul.Validator) error {
-	logger := c.newLogger("func", "handleCheckedMsg", "from", msg.Address)
+	logger := c.newLogger("func", "handleCheckedMsg", "tag", "handleMsg", "from", msg.Address)
 
 	// Store the message if it's a future message
 	catchFutureMessages := func(err error) error {

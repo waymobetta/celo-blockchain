@@ -182,6 +182,7 @@ func (c *core) handleRoundChange(msg *istanbul.Message) error {
 		return errInvalidMessage
 	}
 	logger = logger.New("msg_round", rc.View.Round, "msg_seq", rc.View.Sequence)
+	logger.Trace("Got round change message", "m", msg)
 
 	// Must be same sequence and future round.
 	err := c.checkMessage(istanbul.MsgRoundChange, rc.View)

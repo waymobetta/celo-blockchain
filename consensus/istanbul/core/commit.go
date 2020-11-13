@@ -110,6 +110,8 @@ func (c *core) handleCommit(msg *istanbul.Message) error {
 	if err != nil {
 		return errFailedDecodeCommit
 	}
+	logger := c.newLogger("func", "handleCommit", "tag", "handleMsg", "msg_view", commit.Subject.View)
+	logger.Trace("Got commit message", "m", msg)
 
 	err = c.checkMessage(istanbul.MsgCommit, commit.Subject.View)
 
@@ -136,6 +138,7 @@ func (c *core) handleCommit(msg *istanbul.Message) error {
 
 func (c *core) handleCheckedCommitForPreviousSequence(msg *istanbul.Message, commit *istanbul.CommittedSubject) error {
 	logger := c.newLogger("func", "handleCheckedCommitForPreviousSequence", "tag", "handleMsg", "msg_view", commit.Subject.View)
+	logger.Trace("Got commit message for prev seq", "m", msg)
 	headBlock := c.backend.GetCurrentHeadBlock()
 	// Retrieve the validator set for the previous proposal (which should
 	// match the one broadcast)
@@ -169,6 +172,8 @@ func (c *core) handleCheckedCommitForPreviousSequence(msg *istanbul.Message, com
 
 func (c *core) handleCheckedCommitForCurrentSequence(msg *istanbul.Message, commit *istanbul.CommittedSubject) error {
 	logger := c.newLogger("func", "handleCheckedCommitForCurrentSequence", "tag", "handleMsg")
+	logger.Trace("Got commit message for curren seq", "m", msg)
+
 	validator := c.current.GetValidatorByAddress(msg.Address)
 	if validator == nil {
 		return errInvalidValidatorAddress
