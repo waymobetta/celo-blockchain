@@ -194,6 +194,9 @@ func (c *core) handleCheckedMsg(msg *istanbul.Message, src istanbul.Validator) e
 				c.backlog.store(msg)
 			}
 		}
+		if err != nil {
+			logger.Warn("Error in handling message", "m", msg, "err", err)
+		}
 		return err
 	}
 
