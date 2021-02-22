@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/celo-org/celo-blockchain/accounts"
@@ -31,6 +32,10 @@ import (
 	"github.com/celo-org/celo-blockchain/p2p/enode"
 	"github.com/celo-org/celo-blockchain/rlp"
 )
+
+var Once sync.Once                              // csv header printer
+var SleepTime, VerifyTime, TxTime time.Duration // durations for specific parts
+var IBFTStart, CycleStart time.Time             // start times
 
 // Decrypt is a decrypt callback function to request an ECIES ciphertext to be
 // decrypted
