@@ -147,7 +147,7 @@ func Convert(val *big.Int, currencyFrom *common.Address, currencyTo *common.Addr
 }
 
 func Cmp(val1 *big.Int, currency1 *common.Address, val2 *big.Int, currency2 *common.Address) int {
-	if currency1 == currency2 {
+	if *currency1 == *currency2 {
 		return val1.Cmp(val2)
 	}
 
