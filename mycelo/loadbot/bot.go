@@ -2,6 +2,7 @@ package loadbot
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -91,6 +92,12 @@ func runBot(ctx context.Context, acc env.Account, verbose bool, sleepTime time.D
 		}
 		txSentTime := time.Now()
 		recipient, value := nextTransfer()
+		if n, _ := rand.Int(rand.Reader, common.Big2); n.Cmp(common.Big0) == 0 {
+			transactor.FeeCurrency = &stableTokenAddress
+
+		} else {
+			transactor.FeeCurrency = nil
+		}
 		tx, err := stableToken.TxObj(transactor, "transferWithComment", recipient, value, "need to proivde some long comment to make it similar to an encrypted comment").Send()
 		if err != nil {
 			if err != context.Canceled {
