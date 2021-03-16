@@ -29,6 +29,7 @@ import (
 	istanbulCore "github.com/celo-org/celo-blockchain/consensus/istanbul/core"
 	"github.com/celo-org/celo-blockchain/consensus/istanbul/uptime"
 	"github.com/celo-org/celo-blockchain/consensus/istanbul/validator"
+	"github.com/celo-org/celo-blockchain/contract_comm"
 	"github.com/celo-org/celo-blockchain/contract_comm/blockchain_parameters"
 	gpm "github.com/celo-org/celo-blockchain/contract_comm/gasprice_minimum"
 	ethCore "github.com/celo-org/celo-blockchain/core"
@@ -598,6 +599,8 @@ func (sb *Backend) SetChain(chain consensus.ChainReader, currentBlock func() *ty
 	sb.stateAt = stateAt
 
 	if bc, ok := chain.(*ethCore.BlockChain); ok {
+		// TODO(joshua): It's important that contract comm gets set here
+		sb.contractComm, _ = contract_comm.New(bc)
 		go sb.newChainHeadLoop(bc)
 		go sb.updateReplicaStateLoop(bc)
 	}

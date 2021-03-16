@@ -31,7 +31,6 @@ import (
 	"github.com/celo-org/celo-blockchain/contract_comm/epoch_rewards"
 	"github.com/celo-org/celo-blockchain/contract_comm/freezer"
 	"github.com/celo-org/celo-blockchain/contract_comm/gold_token"
-	"github.com/celo-org/celo-blockchain/contract_comm/validators"
 	"github.com/celo-org/celo-blockchain/core"
 	"github.com/celo-org/celo-blockchain/core/state"
 	"github.com/celo-org/celo-blockchain/core/types"
@@ -151,7 +150,7 @@ func (sb *Backend) updateValidatorScores(header *types.Header, state *state.Stat
 
 	for i, val := range valSet {
 		logger.Trace("Updating validator score", "uptime", uptimes[i], "address", val.Address())
-		err := validators.UpdateValidatorScore(header, state, val.Address(), uptimes[i])
+		err := sb.contractComm.UpdateValidatorScore(header, state, val.Address(), uptimes[i])
 		if err != nil {
 			return nil, err
 		}
@@ -163,7 +162,7 @@ func (sb *Backend) distributeValidatorRewards(header *types.Header, state *state
 	totalValidatorRewards := big.NewInt(0)
 	for _, val := range valSet {
 		sb.logger.Debug("Distributing epoch reward for validator", "address", val.Address())
-		validatorReward, err := validators.DistributeEpochReward(header, state, val.Address(), maxReward)
+		validatorReward, err := sb.contractComm.DistributeEpochReward(header, state, val.Address(), maxReward)
 		if err != nil {
 			sb.logger.Error("Error in distributing rewards to validator", "address", val.Address(), "err", err)
 			continue
@@ -210,7 +209,7 @@ func (sb *Backend) distributeVoterRewards(header *types.Header, state *state.Sta
 	groupUptimes := make(map[common.Address][]*big.Int)
 	groupElectedValidator := make(map[common.Address]bool)
 	for i, val := range valSet {
-		group, err := validators.GetMembershipInLastEpoch(header, state, val.Address())
+		group, err := sb.contractComm.GetMembershipInLastEpoch(header, state, val.Address())
 		if err != nil {
 			return err
 		}

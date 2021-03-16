@@ -234,7 +234,7 @@ func New(ctx *node.ServiceContext, config *Config) (*Ethereum, error) {
 		return nil, err
 	}
 
-	// If the engine is istanbul, then inject the blockchain
+	// If the engine is istanbul, then inject the blockchain (sets up the new contract comm interface)
 	if istanbul, isIstanbul := eth.engine.(*istanbulBackend.Backend); isIstanbul {
 		istanbul.SetChain(
 			eth.blockchain, eth.blockchain.CurrentBlock,
