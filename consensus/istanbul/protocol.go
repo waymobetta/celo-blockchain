@@ -32,7 +32,7 @@ const ProtocolName = "istanbul"
 
 // ProtocolVersions are the supported versions of the istanbul protocol (first is primary).
 // (First is primary in the sense that it's the most current one supported, not in the sense of IsPrimary() below)
-var ProtocolVersions = []uint{Celo66, Celo65, Celo64}
+var ProtocolVersions = []uint{Celo65, Celo64}
 
 // Returns whether this version of Istanbul should have Primary: true (a legacy property that was needed to work
 // around an upstream bug in the LES protocol which prevented two LES servers from connecting to each other).
