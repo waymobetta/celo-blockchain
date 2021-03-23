@@ -25,6 +25,7 @@ import (
 
 	"github.com/celo-org/celo-blockchain/common"
 	"github.com/celo-org/celo-blockchain/consensus"
+	"github.com/celo-org/celo-blockchain/consensus/istanbul"
 	"github.com/celo-org/celo-blockchain/consensus/misc"
 	"github.com/celo-org/celo-blockchain/contract_comm/currency"
 	gpm "github.com/celo-org/celo-blockchain/contract_comm/gasprice_minimum"
@@ -955,6 +956,7 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 			localTxs[account] = txs
 		}
 	}
+	start := time.Now()
 	if len(localTxs) > 0 {
 		txs := types.NewTransactionsByPriceAndNonce(w.current.signer, localTxs, w.txCmp)
 		if w.commitTransactions(txs, txFeeRecipient, interrupt) {
@@ -967,6 +969,7 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 			return
 		}
 	}
+	istanbul.TxTime = time.Now().Sub(start)
 	w.commit(w.fullTaskHook, true, tstart)
 }
 
