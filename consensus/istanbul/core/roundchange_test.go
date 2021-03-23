@@ -515,10 +515,11 @@ func TestPreparedCertificatePersistsThroughRoundChanges(t *testing.T) {
 
 	istMsgDistribution := map[uint64]map[int]bool{}
 
-	// Send PREPARE messages to F + 1 nodes so we guarantee a PREPARED certificate in the ROUND CHANGE certificate..
+	// Send Q PREPARE messages to F + 1 nodes so we guarantee a PREPARED certificate in the ROUND CHANGE certificate.
+	// Disable COMMIT messages to force a round change
 	istMsgDistribution[istanbul.MsgPreprepare] = gossip
 	istMsgDistribution[istanbul.MsgPrepare] = sendToFPlus1
-	istMsgDistribution[istanbul.MsgCommit] = gossip
+	istMsgDistribution[istanbul.MsgCommit] = noGossip
 	istMsgDistribution[istanbul.MsgRoundChange] = gossip
 
 	go sys.distributeIstMsgs(t, sys, istMsgDistribution)
@@ -529,12 +530,14 @@ func TestPreparedCertificatePersistsThroughRoundChanges(t *testing.T) {
 
 	// Wait for round 1 to start.
 	<-timeout.Chan()
-	// Turn PREPARE messages back on in time for round 2.
+	// Turn PREPARE and COMMIT messages back on in time for round 2.
 	<-time.After(1 * time.Second)
 	istMsgDistribution[istanbul.MsgPrepare] = gossip
+	istMsgDistribution[istanbul.MsgCommit] = gossip
 
 	// Wait for round 2 to start.
 	<-timeout.Chan()
+	<-time.After(2 * time.Second)
 
 	select {
 	case <-timeout.Chan():
