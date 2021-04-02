@@ -141,6 +141,9 @@ func (e loadtestEnv) createGenesisConfig(env *env.Environment) (*genesis.Config,
 		BlockPeriod:    5,
 		RequestTimeout: 3000,
 	})
+	genesisConfig.Hardforks = genesis.HardforkConfig{
+		DonutBlock: nil,
+	}
 
 	// 10 billion gas limit, set super high on purpose
 	genesisConfig.Blockchain.BlockGasLimit = 1000000000
