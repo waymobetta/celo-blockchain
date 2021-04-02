@@ -642,7 +642,8 @@ func (evm *EVM) MemoizedStaticCallFromSystem(contractAddress common.Address, abi
 			cacheHits.Mark(1)
 			ret := make([]byte, len(cachedResult.ret))
 			copy(ret, cachedResult.ret)
-			if evm.vmConfig.CheckStaticCallCache {
+			// hard code this
+			if true {
 				actualRet, actualGasLeft, actualErr := evm.StaticCall(systemCaller, contractAddress, transactionData, gas)
 				if actualErr != nil {
 					log.Error("non nil error when performing evm static call that wanted to use the cached result", "func", "MemoizedStaticCallFromSystem")
