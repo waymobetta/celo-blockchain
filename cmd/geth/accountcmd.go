@@ -534,22 +534,25 @@ func importWallet(ctx *cli.Context) error {
 }
 
 func accountImport(ctx *cli.Context) error {
-	keyfile := ctx.Args().First()
-	if len(keyfile) == 0 {
-		utils.Fatalf("keyfile must be given as argument")
-	}
-	key, err := crypto.LoadECDSA(keyfile)
-	if err != nil {
-		utils.Fatalf("Failed to load the private key: %v", err)
-	}
 	stack, _ := makeConfigNode(ctx)
-	passphrase := getPassPhrase("Your new account is locked with a password. Please give a password. Do not forget this password.", true, 0, utils.MakePasswordList(ctx))
-
 	ks := stack.AccountManager().Backends(keystore.KeyStoreType)[0].(*keystore.KeyStore)
-	acct, err := ks.ImportECDSA(key, passphrase)
-	if err != nil {
-		utils.Fatalf("Could not create the account: %v", err)
+	files := ctx.Args()
+	for _, keyfile := range files {
+
+		if len(keyfile) == 0 {
+			utils.Fatalf("keyfile must be given as argument")
+		}
+		key, err := crypto.LoadECDSA(keyfile)
+		if err != nil {
+			utils.Fatalf("Failed to load the private key: %v", err)
+		}
+		passphrase := getPassPhrase("Your new account is locked with a password. Please give a password. Do not forget this password.", true, 0, utils.MakePasswordList(ctx))
+
+		acct, err := ks.ImportECDSA(key, passphrase)
+		if err != nil {
+			utils.Fatalf("Could not create the account: %v", err)
+		}
+		fmt.Printf("Address: {%x}\n", acct.Address)
 	}
-	fmt.Printf("Address: {%x}\n", acct.Address)
 	return nil
 }
