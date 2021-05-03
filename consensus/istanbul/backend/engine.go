@@ -20,7 +20,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
+	"os"
 	"time"
 
 	"github.com/celo-org/celo-blockchain/common"
@@ -251,9 +253,17 @@ func (sb *Backend) verifySigner(chain consensus.ChainReader, header *types.Heade
 	return nil
 }
 
+var verifyAggregatedSealsFile, blsVerifyFile io.Writer
+
+func init() {
+	verifyAggregatedSealsFile, _ = os.Create("verifyAggregatedSeals_ns.txt")
+	blsVerifyFile, _ = os.Create("bls_ns.txt")
+}
+
 // verifyAggregatedSeals checks whether the aggregated seal and parent seal in the header is
 // signed on by the block's validators and the parent block's validators respectively
 func (sb *Backend) verifyAggregatedSeals(chain consensus.ChainReader, header *types.Header, parents []*types.Header) error {
+	start := time.Now()
 	number := header.Number.Uint64()
 	// We don't need to verify committed seals in the genesis block
 	if number == 0 {
@@ -310,6 +320,7 @@ func (sb *Backend) verifyAggregatedSeals(chain consensus.ChainReader, header *ty
 		// immediately before the current block.
 		return sb.verifyAggregatedSeal(header.ParentHash, parentValidators, extra.ParentAggregatedSeal)
 	}
+	fmt.Fprintf(verifyAggregatedSealsFile, "%v", time.Since(start).Nanoseconds())
 
 	return nil
 }
@@ -334,7 +345,9 @@ func (sb *Backend) verifyAggregatedSeal(headerHash common.Hash, validators istan
 		logger.Error("Aggregated seal does not aggregate enough seals", "numSeals", len(publicKeys), "minimum quorum size", validators.MinQuorumSize())
 		return errInsufficientSeals
 	}
+	start := time.Now()
 	err := blscrypto.VerifyAggregatedSignature(publicKeys, proposalSeal, []byte{}, aggregatedSeal.Signature, false, false)
+	fmt.Fprint(blsVerifyFile, time.Since(start).Nanoseconds())
 	if err != nil {
 		logger.Error("Unable to verify aggregated signature", "err", err)
 		return errInvalidSignature
