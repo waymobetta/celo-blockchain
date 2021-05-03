@@ -320,7 +320,7 @@ func (sb *Backend) verifyAggregatedSeals(chain consensus.ChainReader, header *ty
 		// immediately before the current block.
 		return sb.verifyAggregatedSeal(header.ParentHash, parentValidators, extra.ParentAggregatedSeal)
 	}
-	fmt.Fprintf(verifyAggregatedSealsFile, "%v", time.Since(start).Nanoseconds())
+	fmt.Fprintf(verifyAggregatedSealsFile, "%v\n", time.Since(start).Nanoseconds())
 
 	return nil
 }
@@ -347,7 +347,7 @@ func (sb *Backend) verifyAggregatedSeal(headerHash common.Hash, validators istan
 	}
 	start := time.Now()
 	err := blscrypto.VerifyAggregatedSignature(publicKeys, proposalSeal, []byte{}, aggregatedSeal.Signature, false, false)
-	fmt.Fprint(blsVerifyFile, time.Since(start).Nanoseconds())
+	fmt.Fprintf(blsVerifyFile, "%v\n", time.Since(start).Nanoseconds())
 	if err != nil {
 		logger.Error("Unable to verify aggregated signature", "err", err)
 		return errInvalidSignature
