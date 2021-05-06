@@ -244,6 +244,76 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	return worker
 }
 
+// validator loop is launched when mining begins
+func (w *worker) validatorLoop() {
+
+}
+
+// nonValidatorLoop is launched on worker creation & stopped when mining begins
+func (w *worker) nonValidatorLoop() {
+	defer w.txsSub.Unsubscribe()
+	defer w.chainHeadSub.Unsubscribe()
+	defer w.chainSideSub.Unsubscribe()
+
+	for {
+		select {
+		case <-w.newWorkCh:
+			if h, ok := w.engine.(consensus.Handler); ok {
+				h.NewWork()
+			}
+		case ev := <-w.chainSideCh:
+			// TOOO(nategraf): Remove this subcription, as there is no work to be done here.
+			log.Debug("Message in chan chainSideCh", "hash", ev.Block.Hash(), "number", ev.Block.Number(), "root", ev.Block.Root())
+
+		case ev := <-w.txsCh:
+			// Apply transactions to the pending state if we're not mining.
+			//
+			// Note all transactions received may not be continuous with transactions
+			// already included in the current mining block. These transactions will
+			// be automatically eliminated.
+			if !w.isRunning() && w.current != nil {
+				// If block is already full, abort
+				if gp := w.current.gasPool; gp != nil && gp.Gas() < params.TxGas {
+					continue
+				}
+				w.mu.RLock()
+				txFeeRecipient := w.txFeeRecipient
+				if !w.chainConfig.IsDonut(w.current.header.Number) && w.txFeeRecipient != w.validator {
+					txFeeRecipient = w.validator
+					log.Warn("TxFeeRecipient and Validator flags set before split etherbase fork is active. Defaulting to the given validator address for the coinbase.")
+				}
+				w.mu.RUnlock()
+
+				txs := make(map[common.Address]types.Transactions)
+				for _, tx := range ev.Txs {
+					acc, _ := types.Sender(w.current.signer, tx)
+					txs[acc] = append(txs[acc], tx)
+				}
+
+				txset := types.NewTransactionsByPriceAndNonce(w.current.signer, txs, w.createTxCmp())
+				tcount := w.current.tcount
+				w.commitTransactions(txset, txFeeRecipient, nil)
+				// Only update the snapshot if any new transactons were added
+				// to the pending block
+				if tcount != w.current.tcount {
+					w.updateSnapshot()
+				}
+			}
+			atomic.AddInt32(&w.newTxs, int32(len(ev.Txs)))
+
+		// System stopped
+		case <-w.exitCh:
+			return
+		case <-w.txsSub.Err():
+			return
+		case <-w.chainHeadSub.Err():
+			return
+		case <-w.chainSideSub.Err():
+			return
+		}
+	}
+}
+
 // setValidator sets the validator address that signs messages and commits randomness
 func (w *worker) setValidator(addr common.Address) {
 	w.mu.Lock()
