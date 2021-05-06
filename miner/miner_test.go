@@ -32,7 +32,6 @@ import (
 	"github.com/celo-org/celo-blockchain/eth/downloader"
 	"github.com/celo-org/celo-blockchain/ethdb/memorydb"
 	"github.com/celo-org/celo-blockchain/event"
-	"github.com/celo-org/celo-blockchain/params"
 )
 
 type mockBackend struct {
@@ -270,7 +269,7 @@ func createMiner(t *testing.T) (*Miner, *event.TypeMux) {
 	statedb, _ := state.New(common.Hash{}, state.NewDatabase(rawdb.NewMemoryDatabase()), nil)
 	blockchain := &testBlockChain{statedb, 10000000, new(event.Feed)}
 
-	pool := core.NewTxPool(testTxPoolConfig, params.TestChainConfig, blockchain)
+	pool := core.NewTxPool(testTxPoolConfig, chainConfig, blockchain)
 	backend := NewMockBackend(bc, pool)
 	// Create Miner
 	return New(backend, &config, chainConfig, mux, engine, isLocalBlock, nil), mux
