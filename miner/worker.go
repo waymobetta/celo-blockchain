@@ -19,6 +19,7 @@ package miner
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -246,73 +247,77 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 }
 
 // validator loop is launched when mining begins
-func (w *worker) validatorLoop() {
-
-}
-
-// nonValidatorLoop is launched on worker creation & stopped when mining begins
-func (w *worker) nonValidatorLoop() {
-	defer w.txsSub.Unsubscribe()
-	defer w.chainHeadSub.Unsubscribe()
-	defer w.chainSideSub.Unsubscribe()
-
+func (w *worker) loop(done <-chan struct{}) {
 	for {
 		select {
-		case <-w.newWorkCh:
-			if h, ok := w.engine.(consensus.Handler); ok {
-				h.NewWork()
+		case head := <-w.chainHeadCh:
+			headNumber := head.Block.NumberU64()
+			fmt.Println(headNumber)
+			// TODO
+			// 1. Notify IBFT
+			// 2. Schedule new block production
+		case block := <-w.resultCh:
+			// Insert block into the chain
+			// Short circuit when receiving empty result.
+			if block == nil {
+				continue
 			}
-		case ev := <-w.chainSideCh:
-			// TOOO(nategraf): Remove this subcription, as there is no work to be done here.
-			log.Debug("Message in chan chainSideCh", "hash", ev.Block.Hash(), "number", ev.Block.Number(), "root", ev.Block.Root())
-
-		case ev := <-w.txsCh:
-			// Apply transactions to the pending state if we're not mining.
-			//
-			// Note all transactions received may not be continuous with transactions
-			// already included in the current mining block. These transactions will
-			// be automatically eliminated.
-			if !w.isRunning() && w.current != nil {
-				// If block is already full, abort
-				if gp := w.current.gasPool; gp != nil && gp.Gas() < params.TxGas {
-					continue
-				}
-				w.mu.RLock()
-				txFeeRecipient := w.txFeeRecipient
-				if !w.chainConfig.IsDonut(w.current.header.Number) && w.txFeeRecipient != w.validator {
-					txFeeRecipient = w.validator
-					log.Warn("TxFeeRecipient and Validator flags set before split etherbase fork is active. Defaulting to the given validator address for the coinbase.")
-				}
-				w.mu.RUnlock()
-
-				txs := make(map[common.Address]types.Transactions)
-				for _, tx := range ev.Txs {
-					acc, _ := types.Sender(w.current.signer, tx)
-					txs[acc] = append(txs[acc], tx)
-				}
-
-				txset := types.NewTransactionsByPriceAndNonce(w.current.signer, txs, w.createTxCmp())
-				tcount := w.current.tcount
-				w.commitTransactions(txset, txFeeRecipient, nil)
-				// Only update the snapshot if any new transactons were added
-				// to the pending block
-				if tcount != w.current.tcount {
-					w.updateSnapshot()
-				}
+			// Short circuit when receiving duplicate result caused by resubmitting.
+			if w.chain.HasBlock(block.Hash(), block.NumberU64()) {
+				continue
 			}
-			atomic.AddInt32(&w.newTxs, int32(len(ev.Txs)))
+			var (
+				sealhash = w.engine.SealHash(block.Header())
+				hash     = block.Hash()
+			)
+			w.pendingMu.RLock()
+			task, exist := w.pendingTasks[sealhash]
+			w.pendingMu.RUnlock()
+			if !exist {
+				log.Error("Block found but no relative pending task", "number", block.Number(), "sealhash", sealhash, "hash", hash)
+				continue
+			}
+			// Different block could share same sealhash, deep copy here to prevent write-write conflict.
+			var (
+				receipts = make([]*types.Receipt, len(task.receipts))
+				logs     []*types.Log
+			)
+			for i, receipt := range task.receipts {
+				// add block location fields
+				receipt.BlockHash = hash
+				receipt.BlockNumber = block.Number()
+				receipt.TransactionIndex = uint(i)
 
-		// System stopped
-		case <-w.exitCh:
-			return
-		case <-w.txsSub.Err():
-			return
-		case <-w.chainHeadSub.Err():
-			return
-		case <-w.chainSideSub.Err():
+				receipts[i] = new(types.Receipt)
+				*receipts[i] = *receipt
+				// Update the block hash in all logs since it is now available and not when the
+				// receipt/log of individual transactions were created.
+				for _, log := range receipt.Logs {
+					log.BlockHash = hash
+					// Handle block finalization receipt
+					if (log.TxHash == common.Hash{}) {
+						log.TxHash = hash
+					}
+				}
+				logs = append(logs, receipt.Logs...)
+			}
+			// Commit block and state to database.
+			_, err := w.chain.WriteBlockWithState(block, receipts, logs, task.state, true)
+			if err != nil {
+				log.Error("Failed writing block to chain", "err", err)
+				continue
+			}
+			blockFinalizationTimeGauge.Update(time.Now().UnixNano() - int64(block.Time())*1000000000)
+			log.Info("Successfully sealed new block", "number", block.Number(), "sealhash", sealhash, "hash", hash,
+				"elapsed", common.PrettyDuration(time.Since(task.createdAt)))
+
+			// Broadcast the block and announce chain insertion event
+			w.mux.Post(core.NewMinedBlockEvent{Block: block})
+		case <-done:
 			return
 		}
 	}
+
 }
 
 // setValidator sets the validator address that signs messages and commits randomness
@@ -545,6 +550,8 @@ func (w *worker) mainLoop() {
 	defer w.chainHeadSub.Unsubscribe()
 	defer w.chainSideSub.Unsubscribe()
 
+	log.Error("worker main loop started")
+
 	for {
 		select {
 		case req := <-w.newWorkCh:
@@ -564,6 +571,7 @@ func (w *worker) mainLoop() {
 			// already included in the current mining block. These transactions will
 			// be automatically eliminated.
 			if !w.isRunning() && w.current != nil {
+				panic("worker non running with non nil current")
 				// If block is already full, abort
 				if gp := w.current.gasPool; gp != nil && gp.Gas() < params.TxGas {
 					continue
