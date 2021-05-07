@@ -146,8 +146,6 @@ type worker struct {
 	txsSub       event.Subscription
 	chainHeadCh  chan core.ChainHeadEvent
 	chainHeadSub event.Subscription
-	chainSideCh  chan core.ChainSideEvent
-	chainSideSub event.Subscription
 
 	// Channels
 	newWorkCh          chan *newWorkReq
@@ -209,7 +207,6 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		pendingTasks:        make(map[common.Hash]*task),
 		txsCh:               make(chan core.NewTxsEvent, txChanSize),
 		chainHeadCh:         make(chan core.ChainHeadEvent, chainHeadChanSize),
-		chainSideCh:         make(chan core.ChainSideEvent, chainSideChanSize),
 		newWorkCh:           make(chan *newWorkReq),
 		taskCh:              make(chan *task),
 		resultCh:            make(chan *types.Block, resultQueueSize),
@@ -224,7 +221,6 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	worker.txsSub = eth.TxPool().SubscribeNewTxsEvent(worker.txsCh)
 	// Subscribe events for blockchain
 	worker.chainHeadSub = eth.BlockChain().SubscribeChainHeadEvent(worker.chainHeadCh)
-	worker.chainSideSub = eth.BlockChain().SubscribeChainSideEvent(worker.chainSideCh)
 
 	// Sanitize recommit interval if the user-specified one is too short.
 	recommit := worker.config.Recommit
@@ -507,7 +503,6 @@ func (w *worker) newWorkLoop() {
 func (w *worker) mainLoop() {
 	defer w.txsSub.Unsubscribe()
 	defer w.chainHeadSub.Unsubscribe()
-	defer w.chainSideSub.Unsubscribe()
 
 	log.Error("worker main loop started")
 
@@ -518,56 +513,12 @@ func (w *worker) mainLoop() {
 				h.NewWork()
 			}
 			w.commitNewWork(req.interrupt, req.noempty, req.timestamp)
-
-		case ev := <-w.chainSideCh:
-			// TOOO(nategraf): Remove this subcription, as there is no work to be done here.
-			log.Debug("Message in chan chainSideCh", "hash", ev.Block.Hash(), "number", ev.Block.Number(), "root", ev.Block.Root())
-
-		case ev := <-w.txsCh:
-			// Apply transactions to the pending state if we're not mining.
-			//
-			// Note all transactions received may not be continuous with transactions
-			// already included in the current mining block. These transactions will
-			// be automatically eliminated.
-			if !w.isRunning() && w.current != nil {
-				panic("worker non running with non nil current")
-				// If block is already full, abort
-				if gp := w.current.gasPool; gp != nil && gp.Gas() < params.TxGas {
-					continue
-				}
-				w.mu.RLock()
-				txFeeRecipient := w.txFeeRecipient
-				if !w.chainConfig.IsDonut(w.current.header.Number) && w.txFeeRecipient != w.validator {
-					txFeeRecipient = w.validator
-					log.Warn("TxFeeRecipient and Validator flags set before split etherbase fork is active. Defaulting to the given validator address for the coinbase.")
-				}
-				w.mu.RUnlock()
-
-				txs := make(map[common.Address]types.Transactions)
-				for _, tx := range ev.Txs {
-					acc, _ := types.Sender(w.current.signer, tx)
-					txs[acc] = append(txs[acc], tx)
-				}
-
-				txset := types.NewTransactionsByPriceAndNonce(w.current.signer, txs, w.createTxCmp())
-				tcount := w.current.tcount
-				w.commitTransactions(txset, txFeeRecipient, nil)
-				// Only update the snapshot if any new transactons were added
-				// to the pending block
-				if tcount != w.current.tcount {
-					w.updateSnapshot()
-				}
-			}
-			atomic.AddInt32(&w.newTxs, int32(len(ev.Txs)))
-
 		// System stopped
 		case <-w.exitCh:
 			return
 		case <-w.txsSub.Err():
 			return
 		case <-w.chainHeadSub.Err():
-			return
-		case <-w.chainSideSub.Err():
 			return
 		}
 	}
@@ -1108,14 +1059,6 @@ func copyReceipts(receipts []*types.Receipt) []*types.Receipt {
 		result[i] = &cpy
 	}
 	return result
-}
-
-// postSideBlock fires a side chain event, only use it for testing.
-func (w *worker) postSideBlock(event core.ChainSideEvent) {
-	select {
-	case w.chainSideCh <- event:
-	case <-w.exitCh:
-	}
 }
 
 // totalFees computes total consumed fees in ETH. Block transactions and receipts have to have the same order.
