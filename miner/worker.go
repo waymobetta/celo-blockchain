@@ -234,7 +234,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	}
 
 	go worker.mainLoop()
-	go worker.newWorkLoop(recommit)
+	go worker.newWorkLoop()
 	go worker.resultLoop()
 	go worker.taskLoop()
 
@@ -454,16 +454,11 @@ func recalcRecommit(minRecommit, prev time.Duration, target float64, inc bool) t
 }
 
 // newWorkLoop is a standalone goroutine to submit new mining work upon received events.
-func (w *worker) newWorkLoop(recommit time.Duration) {
+func (w *worker) newWorkLoop() {
 	var (
-		interrupt   *int32
-		minRecommit = recommit // minimal resubmit interval specified by user.
-		timestamp   int64      // timestamp for each round of mining.
+		interrupt *int32
+		timestamp int64 // timestamp for each round of mining.
 	)
-
-	timer := time.NewTimer(0)
-	defer timer.Stop()
-	<-timer.C // discard the initial tick
 
 	// commit aborts in-flight transaction execution with given signal and resubmits a new one.
 	commit := func(noempty bool, s int32) {
@@ -476,7 +471,6 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 		case <-w.exitCh:
 			return
 		}
-		timer.Reset(recommit)
 		atomic.StoreInt32(&w.newTxs, 0)
 	}
 	// clearPending cleans the stale pending tasks.
@@ -502,28 +496,6 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			clearPending(headNumber)
 			timestamp = time.Now().Unix()
 			commit(false, commitInterruptNewHead)
-
-		case interval := <-w.resubmitIntervalCh:
-			// Adjust resubmit interval explicitly by user.
-			if interval < minRecommitInterval {
-				log.Warn("Sanitizing miner recommit interval", "provided", interval, "updated", minRecommitInterval)
-				interval = minRecommitInterval
-			}
-			log.Info("Miner recommit interval update", "from", minRecommit, "to", interval)
-			minRecommit, recommit = interval, interval
-
-		case adjust := <-w.resubmitAdjustCh:
-			// Adjust resubmit interval by feedback.
-			if adjust.inc {
-				before := recommit
-				target := float64(recommit.Nanoseconds()) / adjust.ratio
-				recommit = recalcRecommit(minRecommit, recommit, target, true)
-				log.Trace("Increase miner recommit interval", "from", before, "to", recommit)
-			} else {
-				before := recommit
-				recommit = recalcRecommit(minRecommit, recommit, float64(minRecommit.Nanoseconds()), false)
-				log.Trace("Decrease miner recommit interval", "from", before, "to", recommit)
-			}
 
 		case <-w.exitCh:
 			return
