@@ -160,9 +160,8 @@ func newTestWorkerBackend(t *testing.T, chainConfig *params.ChainConfig, engine 
 	}
 }
 
-func (b *testWorkerBackend) AccountManager() *accounts.Manager { return b.accountManager }
-func (b *testWorkerBackend) BlockChain() *core.BlockChain      { return b.chain }
-func (b *testWorkerBackend) TxPool() *core.TxPool              { return b.txPool }
+func (b *testWorkerBackend) BlockChain() *core.BlockChain { return b.chain }
+func (b *testWorkerBackend) TxPool() *core.TxPool         { return b.txPool }
 
 func (b *testWorkerBackend) newRandomTx(creation bool) *types.Transaction {
 	var tx *types.Transaction
@@ -174,13 +173,13 @@ func (b *testWorkerBackend) newRandomTx(creation bool) *types.Transaction {
 	return tx
 }
 
-func newTestWorker(t *testing.T, chainConfig *params.ChainConfig, engine consensus.Engine, db ethdb.Database, blocks int, shouldAddPendingTxs bool) (*worker, *testWorkerBackend) {
+func newTestWorker(t *testing.T, chainConfig *params.ChainConfig, engine consensus.Istanbul, db ethdb.Database, blocks int, shouldAddPendingTxs bool) (*worker, *testWorkerBackend) {
 	backend := newTestWorkerBackend(t, chainConfig, engine, db, blocks)
 	if shouldAddPendingTxs {
 		backend.txPool.AddLocals(pendingTxs)
 	}
 
-	w := newWorker(testConfig, chainConfig, engine, backend, new(event.TypeMux), nil, backend.db, false)
+	w := newWorker(testConfig, chainConfig, engine, backend, new(event.TypeMux), backend.db)
 	w.setTxFeeRecipient(testBankAddress)
 	w.setValidator(testBankAddress)
 
@@ -190,12 +189,12 @@ func newTestWorker(t *testing.T, chainConfig *params.ChainConfig, engine consens
 func TestGenerateBlockAndImport(t *testing.T) {
 	t.Skip("this test tends to time out. Something to do with removing the ticker for mainLoop.")
 	var (
-		engine      consensus.Engine
+		engine      consensus.Istanbul
 		chainConfig *params.ChainConfig
 		db          = rawdb.NewMemoryDatabase()
 	)
 	chainConfig = params.IstanbulTestChainConfig
-	engine = mockEngine.NewFaker()
+	engine = getAuthorizedIstanbulEngine()
 
 	w, b := newTestWorker(t, chainConfig, engine, db, 0, true)
 	defer w.close()
@@ -207,9 +206,9 @@ func TestGenerateBlockAndImport(t *testing.T) {
 	defer chain.Stop()
 
 	// Ignore empty commit here for less noise.
-	w.skipSealHook = func(task *task) bool {
-		return len(task.receipts) == 0
-	}
+	// w.skipSealHook = func(task *task) bool {
+	// 	return len(task.receipts) == 0
+	// }
 
 	// Wait for mined blocks.
 	sub := w.mux.Subscribe(core.NewMinedBlockEvent{})
@@ -257,176 +256,4 @@ func getAuthorizedIstanbulEngine() consensus.Istanbul {
 	engine.(*istanbulBackend.Backend).Authorize(address, address, &testBankKey.PublicKey, decryptFn, signerFn, signBLSFn, signHashFn)
 	engine.(*istanbulBackend.Backend).StartAnnouncing()
 	return engine
-}
-
-func TestEmptyWorkIstanbul(t *testing.T) {
-	// TODO(nambrot): Fix this
-	t.Skip("Disabled due to flakyness")
-	testEmptyWork(t, istanbulChainConfig, getAuthorizedIstanbulEngine(), false, true)
-	testEmptyWork(t, istanbulChainConfig, getAuthorizedIstanbulEngine(), true, false)
-}
-
-func testEmptyWork(t *testing.T, chainConfig *params.ChainConfig, engine consensus.Engine, expectEmptyBlock bool, shouldAddPendingTxs bool) {
-	defer engine.Close()
-
-	w, _ := newTestWorker(t, chainConfig, engine, rawdb.NewMemoryDatabase(), 0, shouldAddPendingTxs)
-	defer w.close()
-
-	var (
-		taskIndex int
-		taskCh    = make(chan struct{}, 2)
-	)
-	checkEqual := func(t *testing.T, task *task, index int) {
-		// The first empty work without any txs included
-		receiptLen, balance := 0, big.NewInt(0)
-
-		// if !expectEmptyBlock || (index == 1 && shouldAddPendingTxs) {
-		if index == 1 {
-			// The second full work with 1 tx included
-			receiptLen, balance = 1, big.NewInt(1000)
-		}
-
-		if len(task.receipts) != receiptLen {
-			t.Fatalf("receipt number mismatch: have %d, want %d", len(task.receipts), receiptLen)
-		}
-		if task.state.GetBalance(testUserAddress).Cmp(balance) != 0 {
-			t.Fatalf("account balance mismatch: have %d, want %d", task.state.GetBalance(testUserAddress), balance)
-		}
-	}
-	w.newTaskHook = func(task *task) {
-		if task.block.NumberU64() == 1 {
-			checkEqual(t, task, taskIndex)
-			taskIndex += 1
-			taskCh <- struct{}{}
-		}
-	}
-	w.skipSealHook = func(task *task) bool { return true }
-	w.fullTaskHook = func() {
-		time.Sleep(100 * time.Millisecond)
-	}
-	w.start() // Start mining!
-	expectedTasksLen := 1
-	if shouldAddPendingTxs && expectEmptyBlock {
-		expectedTasksLen = 2
-	}
-	for i := 0; i < expectedTasksLen; i += 1 {
-		select {
-		case <-taskCh:
-		case <-time.NewTimer(3 * time.Second).C:
-			t.Error("new task timeout")
-		}
-	}
-
-	select {
-	case <-taskCh:
-		t.Error("should have not received another task")
-	case <-time.NewTimer(time.Second).C:
-	}
-}
-
-// For Ethhash and Clique, it is safe and even desired to start another seal process in the presence of new transactions
-// that potentially increase the fee revenue for the sealer. In Istanbul, that is not possible and even counter productive
-// as proposing another block after having already done so is clearly byzantine behavior.
-func TestRegenerateMiningBlockIstanbul(t *testing.T) {
-	chainConfig := istanbulChainConfig
-	engine := getAuthorizedIstanbulEngine()
-
-	defer engine.Close()
-
-	w, b := newTestWorker(t, chainConfig, engine, rawdb.NewMemoryDatabase(), 0, true)
-	defer w.close()
-
-	var taskCh = make(chan struct{})
-
-	taskIndex := 0
-	w.newTaskHook = func(task *task) {
-		if task.block.NumberU64() == 1 {
-			receiptLen, balance := 1, big.NewInt(1000)
-			if len(task.receipts) != receiptLen {
-				t.Errorf("receipt number mismatch: have %d, want %d", len(task.receipts), receiptLen)
-			}
-			if task.state.GetBalance(testUserAddress).Cmp(balance) != 0 {
-				t.Errorf("account balance mismatch: have %d, want %d", task.state.GetBalance(testUserAddress), balance)
-			}
-			taskCh <- struct{}{}
-			taskIndex += 1
-		}
-	}
-	w.skipSealHook = func(task *task) bool {
-		return true
-	}
-	w.fullTaskHook = func() {
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	w.start()
-	// expect one work
-
-	select {
-	case <-taskCh:
-	case <-time.NewTimer(time.Second).C:
-		t.Error("new task timeout")
-	}
-
-	b.txPool.AddLocals(newTxs)
-	time.Sleep(time.Second)
-
-	select {
-	case <-taskCh:
-		t.Error("Should have not received another task")
-	case <-time.NewTimer(time.Second).C:
-	}
-}
-
-// nolint: unused
-func testRegenerateMiningBlock(t *testing.T, chainConfig *params.ChainConfig, engine consensus.Engine) {
-	defer engine.Close()
-
-	w, b := newTestWorker(t, chainConfig, engine, rawdb.NewMemoryDatabase(), 0, true)
-	defer w.close()
-
-	var taskCh = make(chan struct{})
-
-	taskIndex := 0
-	w.newTaskHook = func(task *task) {
-		if task.block.NumberU64() == 1 {
-			// The first task is an empty task, the second
-			// one has 1 pending tx, the third one has 2 txs
-			if taskIndex == 2 {
-				receiptLen, balance := 2, big.NewInt(2000)
-				if len(task.receipts) != receiptLen {
-					t.Errorf("receipt number mismatch: have %d, want %d", len(task.receipts), receiptLen)
-				}
-				if task.state.GetBalance(testUserAddress).Cmp(balance) != 0 {
-					t.Errorf("account balance mismatch: have %d, want %d", task.state.GetBalance(testUserAddress), balance)
-				}
-			}
-			taskCh <- struct{}{}
-			taskIndex += 1
-		}
-	}
-	w.skipSealHook = func(task *task) bool {
-		return true
-	}
-	w.fullTaskHook = func() {
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	w.start()
-	// Ignore the first two works
-	for i := 0; i < 2; i += 1 {
-		select {
-		case <-taskCh:
-		case <-time.NewTimer(time.Second).C:
-			t.Error("new task timeout")
-		}
-	}
-	b.txPool.AddLocals(newTxs)
-	time.Sleep(time.Second)
-
-	select {
-	case <-taskCh:
-	case <-time.NewTimer(time.Second).C:
-		t.Error("new task timeout")
-	}
 }

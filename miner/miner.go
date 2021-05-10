@@ -65,6 +65,9 @@ type Miner struct {
 	validator common.Address
 	db        ethdb.Database
 
+	// for start/stop
+	chain *core.BlockChain
+
 	startCh chan struct{}
 	stopCh  chan struct{}
 	exitCh  chan struct{}
@@ -77,6 +80,7 @@ func New(eth Backend, config *Config, chainConfig *params.ChainConfig, mux *even
 		engine:    istEngine,
 		validator: config.Validator,
 		db:        db,
+		chain:     eth.BlockChain(),
 		startCh:   make(chan struct{}),
 		stopCh:    make(chan struct{}),
 		exitCh:    make(chan struct{}),
@@ -189,10 +193,22 @@ func (miner *Miner) Start(validator common.Address, txFeeRecipient common.Addres
 	miner.SetValidator(validator)
 	miner.SetTxFeeRecipient(txFeeRecipient)
 	miner.startCh <- struct{}{}
+	// TODO: Why is this here?
+	miner.engine.SetBlockProcessors(miner.chain.HasBadBlock,
+		func(block *types.Block, state *state.StateDB) (types.Receipts, []*types.Log, uint64, error) {
+			return miner.chain.Processor().Process(block, state, *miner.chain.GetVMConfig())
+		},
+		func(block *types.Block, state *state.StateDB, receipts types.Receipts, usedGas uint64) error {
+			return miner.chain.Validator().ValidateState(block, state, receipts, usedGas)
+		})
+	if miner.engine.IsPrimary() {
+		miner.engine.StartValidating()
+	}
 }
 
 func (miner *Miner) Stop() {
 	miner.stopCh <- struct{}{}
+	miner.engine.StopValidating()
 }
 
 func (miner *Miner) Close() {

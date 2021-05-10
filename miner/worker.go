@@ -69,13 +69,22 @@ type blockState struct {
 	randomness *types.Randomness // The types.Randomness of the last block by mined by this worker.
 }
 
+type IstanbulSealer interface {
+	Prepare(chain consensus.ChainReader, header *types.Header) error
+	FinalizeAndAssemble(chain consensus.ChainReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, receipts []*types.Receipt, randomness *types.Randomness) (*types.Block, error)
+	Seal(chain consensus.ChainReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error
+	SealHash(header *types.Header) common.Hash
+	GenerateRandomness(parentHash common.Hash) (common.Hash, common.Hash, error)
+	UpdateValSetDiff(chain consensus.ChainReader, header *types.Header, state *state.StateDB) error
+}
+
 // worker is the main object which takes care of submitting new work to consensus engine
 // and gathering the sealing result.
 type worker struct {
 	// Chain state info
 	signer      types.Signer // Used to check the signature, not to sign
 	chainConfig *params.ChainConfig
-	engine      consensus.Istanbul
+	engine      IstanbulSealer
 	chain       *core.BlockChain
 	db          ethdb.Database // Needed for randomness
 	eth         Backend        // for eth.TxPool()
@@ -112,7 +121,7 @@ type worker struct {
 	blockConstructGauge metrics.Gauge
 }
 
-func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus.Istanbul, eth Backend, mux *event.TypeMux, db ethdb.Database) *worker {
+func newWorker(config *Config, chainConfig *params.ChainConfig, engine IstanbulSealer, eth Backend, mux *event.TypeMux, db ethdb.Database) *worker {
 	worker := &worker{
 		signer:      types.NewEIP155Signer(chainConfig.ChainID),
 		chainConfig: chainConfig,
@@ -165,66 +174,117 @@ func (w *worker) validatorLoop(ctx context.Context) {
 			go w.runBlockCreationThroughSealing(ctx)
 		// runBlockCreationThroughSealing submits a task to engine.Seal which returns to w.resultCh
 		case block := <-w.resultCh:
-			// Short circuit when receiving empty result.
-			if block == nil {
-				continue
-			}
-			// Short circuit when receiving duplicate result caused by resubmitting.
-			if w.chain.HasBlock(block.Hash(), block.NumberU64()) {
-				continue
-			}
-			var (
-				sealhash = w.engine.SealHash(block.Header())
-				hash     = block.Hash()
-			)
-			w.pendingMu.RLock()
-			task, exist := w.pendingTasks[sealhash]
-			w.pendingMu.RUnlock()
-			if !exist {
-				log.Error("Block found but no relative pending task", "number", block.Number(), "sealhash", sealhash, "hash", hash)
-				continue
-			}
-			// Different block could share same sealhash, deep copy here to prevent write-write conflict.
-			var (
-				receipts = make([]*types.Receipt, len(task.receipts))
-				logs     []*types.Log
-			)
-			for i, receipt := range task.receipts {
-				// add block location fields
-				receipt.BlockHash = hash
-				receipt.BlockNumber = block.Number()
-				receipt.TransactionIndex = uint(i)
-
-				receipts[i] = new(types.Receipt)
-				*receipts[i] = *receipt
-				// Update the block hash in all logs since it is now available and not when the
-				// receipt/log of individual transactions were created.
-				for _, log := range receipt.Logs {
-					log.BlockHash = hash
-					// Handle block finalization receipt
-					if (log.TxHash == common.Hash{}) {
-						log.TxHash = hash
-					}
-				}
-				logs = append(logs, receipt.Logs...)
-			}
-			// Commit block and state to database.
-			_, err := w.chain.WriteBlockWithState(block, receipts, logs, task.state, true)
-			if err != nil {
-				log.Error("Failed writing block to chain", "err", err)
-				continue
-			}
-			blockFinalizationTimeGauge.Update(time.Now().UnixNano() - int64(block.Time())*1000000000)
-			log.Info("Successfully sealed new block", "number", block.Number(), "sealhash", sealhash, "hash", hash,
-				"elapsed", common.PrettyDuration(time.Since(task.createdAt)))
-
-			// Broadcast the block and announce chain insertion event
-			w.mux.Post(core.NewMinedBlockEvent{Block: block})
+			go w.insertBlock(block)
 		case <-ctx.Done():
 			return
 		}
 	}
 
+}
+
+// Note: the context must be cancelled to close engine.Seal
+func (w *worker) runBlockCreationThroughSealing(ctx context.Context) {
+	b, _ := newBlockState(w, time.Now().Unix())
+	// newBlockState sleeps, so put a cancel point here
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+
+	localTxs, remoteTxs := generateTransactionLists(w.eth.TxPool(), w)
+	// Each round of tx commit is also a cancel point
+	if localTxs != nil {
+		b.commitTransactions(ctx, localTxs, w)
+		fmt.Println("committed local transactions")
+
+	}
+	if remoteTxs != nil {
+		b.commitTransactions(ctx, remoteTxs, w)
+		fmt.Println("committed remote transactions")
+
+	}
+	task, err := b.finalizeBlock(w, time.Now())
+	fmt.Println("finalized block")
+	if err != nil {
+		// TODO: fix
+		panic(err)
+	}
+	w.updateSnapshot(b)
+
+	sealCtx, cancel := context.WithCancel(ctx)
+	task.cancel = cancel
+
+	// Tie this seal request to the context
+	if err := w.engine.Seal(w.chain, task.block, w.resultCh, sealCtx.Done()); err != nil {
+		log.Warn("Block sealing failed", "err", err)
+	}
+	fmt.Println("set off seal")
+
+	// Concurrently store task
+	sealHash := w.engine.SealHash(task.block.Header())
+	w.pendingMu.Lock()
+	w.pendingTasks[sealHash] = task
+	w.pendingMu.Unlock()
+
+}
+
+func (w *worker) insertBlock(block *types.Block) {
+	// Short circuit when receiving empty result.
+	if block == nil {
+		return
+	}
+	// Short circuit when receiving duplicate result caused by resubmitting.
+	if w.chain.HasBlock(block.Hash(), block.NumberU64()) {
+		return
+	}
+	var (
+		sealhash = w.engine.SealHash(block.Header())
+		hash     = block.Hash()
+	)
+	w.pendingMu.RLock()
+	task, exist := w.pendingTasks[sealhash]
+	w.pendingMu.RUnlock()
+	if !exist {
+		log.Error("Block found but no relative pending task", "number", block.Number(), "sealhash", sealhash, "hash", hash)
+		return
+	}
+	// Different block could share same sealhash, deep copy here to prevent write-write conflict.
+	var (
+		receipts = make([]*types.Receipt, len(task.receipts))
+		logs     []*types.Log
+	)
+	for i, receipt := range task.receipts {
+		// add block location fields
+		receipt.BlockHash = hash
+		receipt.BlockNumber = block.Number()
+		receipt.TransactionIndex = uint(i)
+
+		receipts[i] = new(types.Receipt)
+		*receipts[i] = *receipt
+		// Update the block hash in all logs since it is now available and not when the
+		// receipt/log of individual transactions were created.
+		for _, log := range receipt.Logs {
+			log.BlockHash = hash
+			// Handle block finalization receipt
+			if (log.TxHash == common.Hash{}) {
+				log.TxHash = hash
+			}
+		}
+		logs = append(logs, receipt.Logs...)
+	}
+	// Commit block and state to database.
+	_, err := w.chain.WriteBlockWithState(block, receipts, logs, task.state, true)
+	if err != nil {
+		log.Error("Failed writing block to chain", "err", err)
+		return
+	}
+	blockFinalizationTimeGauge.Update(time.Now().UnixNano() - int64(block.Time())*1000000000)
+	log.Info("Successfully sealed new block", "number", block.Number(), "sealhash", sealhash, "hash", hash,
+		"elapsed", common.PrettyDuration(time.Since(task.createdAt)))
+
+	// Broadcast the block and announce chain insertion event
+	w.mux.Post(core.NewMinedBlockEvent{Block: block})
 }
 
 // setValidator sets the validator address that signs messages and commits randomness
@@ -292,18 +352,6 @@ func (w *worker) start() {
 	w.startCh <- struct{}{}
 	go w.validatorLoop(context.Background())
 
-	// TODO: Why is this here?
-	w.engine.SetBlockProcessors(w.chain.HasBadBlock,
-		func(block *types.Block, state *state.StateDB) (types.Receipts, []*types.Log, uint64, error) {
-			return w.chain.Processor().Process(block, state, *w.chain.GetVMConfig())
-		},
-		func(block *types.Block, state *state.StateDB, receipts types.Receipts, usedGas uint64) error {
-			return w.chain.Validator().ValidateState(block, state, receipts, usedGas)
-		})
-	if w.engine.IsPrimary() {
-		w.engine.StartValidating()
-	}
-
 }
 
 // stop sets the running status as 0.
@@ -312,7 +360,6 @@ func (w *worker) stop() {
 		return
 	}
 	w.running = false
-	w.engine.StopValidating()
 }
 
 // isRunning returns an indicator whether worker is running or not.
