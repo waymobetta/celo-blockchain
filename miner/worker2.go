@@ -21,7 +21,6 @@ package miner
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/celo-org/celo-blockchain/common"
@@ -32,16 +31,13 @@ import (
 
 // Note: the context must be cancelled to close engine.Seal
 func (w *worker) runBlockCreationThroughToInsertion(ctx context.Context) {
-	fmt.Println("starting block creation")
 	b, _ := newBlockState(w, time.Now().Unix())
 	// newBlockState sleeps, so put a cancel point here
 	select {
 	case <-ctx.Done():
-		fmt.Println("run block creation context cancelled after new block")
 		return
 	default:
 	}
-	fmt.Println("built new block")
 
 	localTxs, remoteTxs := generateTransactionLists(w.eth.TxPool(), w)
 	// Each round of tx commit is also a cancel point
@@ -51,13 +47,11 @@ func (w *worker) runBlockCreationThroughToInsertion(ctx context.Context) {
 	if remoteTxs != nil {
 		b.commitTransactions(ctx, remoteTxs, w)
 	}
-	fmt.Println("added transactions")
 	submittedTask, err := b.finalizeBlock(w, time.Now())
 	if err != nil {
 		// TODO: fix
 		panic(err)
 	}
-	fmt.Println("finalized block")
 	w.updateSnapshot(b)
 	// Concurrently store task
 	sealHash := w.engine.SealHash(submittedTask.block.Header())
@@ -71,14 +65,11 @@ func (w *worker) runBlockCreationThroughToInsertion(ctx context.Context) {
 		log.Warn("Block sealing failed", "err", err)
 	}
 
-	fmt.Println("submitted block to seal")
-
 	// What comes out of resultCh does not have to align with the task that
 	// this go-rountine submitted. Even worse, the number of inputs and outputs may not be equal.
 	// Keeping this as is b/c of the stopCh which needs to be cancelled when we get the block or get cancelled ourselves.
 	select {
 	case block := <-resultCh:
-		fmt.Println("Received block from the result channel")
 		sealhash := w.engine.SealHash(block.Header())
 		w.pendingMu.RLock()
 		task, exist := w.pendingTasks[sealhash]
@@ -87,10 +78,8 @@ func (w *worker) runBlockCreationThroughToInsertion(ctx context.Context) {
 			log.Error("Block found but no relative pending task", "number", block.Number(), "sealhash", sealhash, "hash", block.Hash())
 			return
 		}
-		fmt.Println("will insert block")
 		w.insertBlock(block, task)
 	case <-ctx.Done():
-		fmt.Println("run block creation context cancelled at end")
 	}
 
 }
@@ -98,12 +87,10 @@ func (w *worker) runBlockCreationThroughToInsertion(ctx context.Context) {
 func (w *worker) insertBlock(block *types.Block, task *task) {
 	// Short circuit when receiving empty result.
 	if block == nil {
-		fmt.Println("nil block in insertBlock")
 		return
 	}
 	// Short circuit when receiving duplicate result caused by resubmitting.
 	if w.chain.HasBlock(block.Hash(), block.NumberU64()) {
-		fmt.Println("have block in insertBlock")
 		return
 	}
 	var (
@@ -147,6 +134,4 @@ func (w *worker) insertBlock(block *types.Block, task *task) {
 
 	// Broadcast the block and announce chain insertion event
 	w.mux.Post(core.NewMinedBlockEvent{Block: block})
-	fmt.Println("inserted block in insertBlock")
-
 }
