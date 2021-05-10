@@ -18,7 +18,6 @@ package miner
 
 import (
 	"context"
-	"fmt"
 	"math/big"
 	"sync"
 	"time"
@@ -30,6 +29,7 @@ import (
 	"github.com/celo-org/celo-blockchain/core/types"
 	"github.com/celo-org/celo-blockchain/ethdb"
 	"github.com/celo-org/celo-blockchain/event"
+	"github.com/celo-org/celo-blockchain/log"
 	"github.com/celo-org/celo-blockchain/metrics"
 	"github.com/celo-org/celo-blockchain/params"
 )
@@ -153,14 +153,26 @@ func (w *worker) validatorLoop(ctx context.Context) {
 		select {
 		case <-w.startCh:
 			// Run the next task
-			w.runBlockCreationThroughToInsertion(ctx)
+			w.runBlockCreationThroughSealing(ctx)
 		case <-w.chainHeadCh:
 			// Send FinalCommittedEvent to the IBFT engine
 			if h, ok := w.engine.(consensus.Handler); ok {
 				h.NewWork()
 			}
 			// Run the next task
-			w.runBlockCreationThroughToInsertion(ctx)
+			w.runBlockCreationThroughSealing(ctx)
+		// runBlockCreationThroughSealing submits a task to engine.Seal which returns to w.resultCh
+		case block := <-w.resultCh:
+			sealhash := w.engine.SealHash(block.Header())
+			w.pendingMu.RLock()
+			task, exist := w.pendingTasks[sealhash]
+			w.pendingMu.RUnlock()
+			if !exist {
+				log.Error("Block found but no relative pending task", "number", block.Number(), "sealhash", sealhash, "hash", block.Hash())
+				return
+			}
+			w.insertBlock(block, task)
+
 		case <-ctx.Done():
 			return
 		}

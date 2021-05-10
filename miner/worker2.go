@@ -30,7 +30,7 @@ import (
 )
 
 // Note: the context must be cancelled to close engine.Seal
-func (w *worker) runBlockCreationThroughToInsertion(ctx context.Context) {
+func (w *worker) runBlockCreationThroughSealing(ctx context.Context) {
 	b, _ := newBlockState(w, time.Now().Unix())
 	// newBlockState sleeps, so put a cancel point here
 	select {
@@ -59,27 +59,9 @@ func (w *worker) runBlockCreationThroughToInsertion(ctx context.Context) {
 	w.pendingTasks[sealHash] = submittedTask
 	w.pendingMu.Unlock()
 
-	resultCh := make(chan *types.Block)
 	// Tie this seal request to the context
-	if err := w.engine.Seal(w.chain, submittedTask.block, resultCh, ctx.Done()); err != nil {
+	if err := w.engine.Seal(w.chain, submittedTask.block, w.resultCh, ctx.Done()); err != nil {
 		log.Warn("Block sealing failed", "err", err)
-	}
-
-	// What comes out of resultCh does not have to align with the task that
-	// this go-rountine submitted. Even worse, the number of inputs and outputs may not be equal.
-	// Keeping this as is b/c of the stopCh which needs to be cancelled when we get the block or get cancelled ourselves.
-	select {
-	case block := <-resultCh:
-		sealhash := w.engine.SealHash(block.Header())
-		w.pendingMu.RLock()
-		task, exist := w.pendingTasks[sealhash]
-		w.pendingMu.RUnlock()
-		if !exist {
-			log.Error("Block found but no relative pending task", "number", block.Number(), "sealhash", sealhash, "hash", block.Hash())
-			return
-		}
-		w.insertBlock(block, task)
-	case <-ctx.Done():
 	}
 
 }
