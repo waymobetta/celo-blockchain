@@ -113,8 +113,6 @@ type worker struct {
 	snapshotBlock *types.Block
 	snapshotState *state.StateDB
 
-	current *environment
-
 	// atomic status counters
 	running int32 // The indicator whether the consensus engine is running or not.
 	newTxs  int32 // New arrival transaction count since last sealing work submitting.
@@ -220,21 +218,6 @@ func (w *worker) setExtra(extra []byte) {
 	w.extra = extra
 }
 
-// setRecommitInterval no-ops
-func (w *worker) setRecommitInterval(interval time.Duration) {
-
-}
-
-// disablePreseal disables pre-sealing mining feature
-func (w *worker) disablePreseal() {
-	atomic.StoreUint32(&w.noempty, 1)
-}
-
-// enablePreseal enables pre-sealing mining feature
-func (w *worker) enablePreseal() {
-	atomic.StoreUint32(&w.noempty, 0)
-}
-
 // pending returns the pending state and corresponding block.
 func (w *worker) pending() (*types.Block, *state.StateDB) {
 	// return a snapshot to avoid contention on currentMu mutex
@@ -292,15 +275,6 @@ func (w *worker) isRunning() bool {
 func (w *worker) close() {
 	atomic.StoreInt32(&w.running, 0)
 	close(w.exitCh)
-}
-
-func (w *worker) createTxCmp() func(tx1 *types.Transaction, tx2 *types.Transaction) int {
-	// TODO specify header & state
-	currencyManager := currency.NewManager(nil, nil)
-
-	return func(tx1 *types.Transaction, tx2 *types.Transaction) int {
-		return currencyManager.CmpValues(tx1.GasPrice(), tx1.FeeCurrency(), tx2.GasPrice(), tx2.FeeCurrency())
-	}
 }
 
 // newWorkLoop is a standalone goroutine to submit new mining work upon received events.
