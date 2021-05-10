@@ -18,6 +18,7 @@ package miner
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"sync"
 	"time"
@@ -137,12 +138,15 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	// Subscribe events for blockchain
 	worker.chainHeadSub = eth.BlockChain().SubscribeChainHeadEvent(worker.chainHeadCh)
 
+	fmt.Println("created a worker")
+
 	return worker
 }
 
 // validator loop is launched when mining begins
 // Note: need to figure out how to cancel everything
 func (w *worker) validatorLoop(ctx context.Context) {
+	fmt.Println("started validator loop")
 	for {
 		select {
 		case <-w.startCh:

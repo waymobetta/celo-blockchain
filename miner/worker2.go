@@ -21,6 +21,7 @@ package miner
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/celo-org/celo-blockchain/common"
@@ -43,11 +44,16 @@ func (w *worker) runBlockCreationThroughSealing(ctx context.Context) {
 	// Each round of tx commit is also a cancel point
 	if localTxs != nil {
 		b.commitTransactions(ctx, localTxs, w)
+		fmt.Println("committed local transactions")
+
 	}
 	if remoteTxs != nil {
 		b.commitTransactions(ctx, remoteTxs, w)
+		fmt.Println("committed remote transactions")
+
 	}
 	task, err := b.finalizeBlock(w, time.Now())
+	fmt.Println("finalized block")
 	if err != nil {
 		// TODO: fix
 		panic(err)
@@ -61,6 +67,7 @@ func (w *worker) runBlockCreationThroughSealing(ctx context.Context) {
 	if err := w.engine.Seal(w.chain, task.block, w.resultCh, sealCtx.Done()); err != nil {
 		log.Warn("Block sealing failed", "err", err)
 	}
+	fmt.Println("set off seal")
 
 	// Concurrently store task
 	sealHash := w.engine.SealHash(task.block.Header())

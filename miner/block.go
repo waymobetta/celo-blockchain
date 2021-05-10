@@ -156,6 +156,7 @@ func (b *blockState) commitTransactions(ctx context.Context, txs *types.Transact
 	for {
 		select {
 		case <-ctx.Done():
+			fmt.Println("context cancelled when committing transactions")
 			return
 		default:
 		}
@@ -243,12 +244,14 @@ type TxPool interface {
 func generateTransactionLists(txPool TxPool, w *worker) (localTxs, remoteTxs *types.TransactionsByPriceAndNonce) {
 	pending, err := txPool.Pending()
 	if err != nil {
+		fmt.Println("failed to get tx pool pending")
 		log.Error("Failed to fetch pending transactions", "err", err)
 		return nil, nil
 	}
 
 	// Short circuit if there is no available pending transactions.
 	if len(pending) == 0 {
+		fmt.Println("no pending txns")
 		return nil, nil
 	}
 	// Split the pending transactions into locals and remotes
@@ -264,9 +267,11 @@ func generateTransactionLists(txPool TxPool, w *worker) (localTxs, remoteTxs *ty
 	// Create the transaction heaps
 	if len(localTxMap) > 0 {
 		localTxs = types.NewTransactionsByPriceAndNonce(w.signer, localTxMap, txComparator)
+		fmt.Println("have local txs")
 	}
 	if len(remoteTxMap) > 0 {
 		remoteTxs = types.NewTransactionsByPriceAndNonce(w.signer, remoteTxMap, txComparator)
+		fmt.Println("have remote txs")
 	}
 	return localTxs, remoteTxs
 }
