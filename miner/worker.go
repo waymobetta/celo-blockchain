@@ -210,6 +210,22 @@ func (w *worker) loop(done <-chan struct{}) {
 
 }
 
+// updateSnapshot updates pending snapshot block and state.
+// Note this function assumes the current variable is thread safe.
+func (w *worker) updateSnapshot(b *blockState) {
+	w.snapshotMu.Lock()
+	defer w.snapshotMu.Unlock()
+
+	w.snapshotBlock = types.NewBlock(
+		b.header,
+		b.txs,
+		b.receipts,
+		b.randomness,
+	)
+
+	w.snapshotState = b.state.Copy()
+}
+
 // setValidator sets the validator address that signs messages and commits randomness
 func (w *worker) setValidator(addr common.Address) {
 	w.mu.Lock()

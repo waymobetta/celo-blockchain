@@ -66,6 +66,7 @@ func (worker *worker) runBlockCreationThroughToInsertion(ctx context.Context) {
 		// TODO: fix
 		panic(err)
 	}
+	worker.updateSnapshot(b)
 	// Concurrently store task
 	sealHash := c.engine.SealHash(submittedTask.block.Header())
 	worker.pendingMu.Lock()
