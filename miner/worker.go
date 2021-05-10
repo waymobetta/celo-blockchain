@@ -146,15 +146,19 @@ func (w *worker) validatorLoop(ctx context.Context) {
 	for {
 		select {
 		case <-w.startCh:
+			// Send FinalCommittedEvent to the IBFT engine
+			if h, ok := w.engine.(consensus.Handler); ok {
+				h.NewWork()
+			}
 			// Run the next task
-			w.runBlockCreationThroughSealing(ctx)
+			go w.runBlockCreationThroughSealing(ctx)
 		case <-w.chainHeadCh:
 			// Send FinalCommittedEvent to the IBFT engine
 			if h, ok := w.engine.(consensus.Handler); ok {
 				h.NewWork()
 			}
 			// Run the next task
-			w.runBlockCreationThroughSealing(ctx)
+			go w.runBlockCreationThroughSealing(ctx)
 		// runBlockCreationThroughSealing submits a task to engine.Seal which returns to w.resultCh
 		case block := <-w.resultCh:
 			sealhash := w.engine.SealHash(block.Header())
@@ -237,6 +241,7 @@ func (w *worker) start() {
 	}
 	w.running = true
 	w.startCh <- struct{}{}
+	go w.validatorLoop(context.Background())
 
 	// TODO: Why is this here?
 	w.engine.SetBlockProcessors(w.chain.HasBadBlock,
