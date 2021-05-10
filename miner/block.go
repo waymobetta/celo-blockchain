@@ -34,7 +34,6 @@ import (
 	"github.com/celo-org/celo-blockchain/core/types"
 	"github.com/celo-org/celo-blockchain/log"
 	"github.com/celo-org/celo-blockchain/params"
-	mapset "github.com/deckarep/golang-set"
 )
 
 type TxIterator interface {
@@ -47,11 +46,10 @@ type TxIterator interface {
 type environment struct {
 	signer types.Signer
 
-	state     *state.StateDB // apply state changes here
-	ancestors mapset.Set     // ancestor set (used for checking parent validity)
-	tcount    int            // tx count in cycle
-	gasPool   *core.GasPool  // available gas used to pack transactions
-	gasLimit  uint64
+	state    *state.StateDB // apply state changes here
+	tcount   int            // tx count in cycle
+	gasPool  *core.GasPool  // available gas used to pack transactions
+	gasLimit uint64
 
 	header     *types.Header
 	txs        []*types.Transaction
@@ -60,28 +58,22 @@ type environment struct {
 }
 
 // makeCurrent creates a new environment for the current cycle.
-func (w *worker) makeCurrent(parent *types.Block, header *types.Header) (*environment, error) {
+func (w *worker) makeCurrent(parent *types.Block, header *types.Header) error {
 	state, err := w.chain.StateAt(parent.Root())
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	env := &environment{
-		signer:    types.NewEIP155Signer(w.chainConfig.ChainID),
-		state:     state,
-		ancestors: mapset.NewSet(),
-		header:    header,
-		gasLimit:  core.CalcGasLimit(parent, state),
-	}
-
-	// when 08 is processed ancestors contain 07 (quick block)
-	for _, ancestor := range w.chain.GetBlocksFromHash(parent.Hash(), 7) {
-		env.ancestors.Add(ancestor.Hash())
+		signer:   types.NewEIP155Signer(w.chainConfig.ChainID),
+		state:    state,
+		header:   header,
+		gasLimit: core.CalcGasLimit(parent, state),
 	}
 
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
-	return env, nil
+	return nil
 }
 
 // updateSnapshot updates pending snapshot block and state.
@@ -100,28 +92,28 @@ func (w *worker) updateSnapshot() {
 	// w.snapshotState = w.current.state.Copy()
 }
 
-func (w *worker) commitTransaction(tx *types.Transaction, current *environment, txFeeRecipient common.Address) ([]*types.Log, error) {
-	snap := current.state.Snapshot()
+func (w *worker) commitTransaction(tx *types.Transaction, txFeeRecipient common.Address) ([]*types.Log, error) {
+	snap := w.current.state.Snapshot()
 
-	receipt, err := core.ApplyTransaction(w.chainConfig, w.chain, &txFeeRecipient, current.gasPool, current.state, current.header, tx, &current.header.GasUsed, *w.chain.GetVMConfig())
+	receipt, err := core.ApplyTransaction(w.chainConfig, w.chain, &txFeeRecipient, w.current.gasPool, w.current.state, w.current.header, tx, &w.current.header.GasUsed, *w.chain.GetVMConfig())
 	if err != nil {
-		current.state.RevertToSnapshot(snap)
+		w.current.state.RevertToSnapshot(snap)
 		return nil, err
 	}
-	current.txs = append(current.txs, tx)
-	current.receipts = append(current.receipts, receipt)
+	w.current.txs = append(w.current.txs, tx)
+	w.current.receipts = append(w.current.receipts, receipt)
 
 	return receipt.Logs, nil
 }
 
 func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, txFeeRecipient common.Address, interrupt *int32) bool {
 	// Short circuit if current is nil
-	current, err := w.makeCurrent()
-	if err != nil {
-		return false
+	if w.current == nil {
+		return true
 	}
-	if current.gasPool == nil {
-		current.gasPool = new(core.GasPool).AddGas(w.current.gasLimit)
+
+	if w.current.gasPool == nil {
+		w.current.gasPool = new(core.GasPool).AddGas(w.current.gasLimit)
 	}
 
 	var coalescedLogs []*types.Log

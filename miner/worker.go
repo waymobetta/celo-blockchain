@@ -113,6 +113,8 @@ type worker struct {
 	snapshotBlock *types.Block
 	snapshotState *state.StateDB
 
+	current *environment
+
 	// atomic status counters
 	running int32 // The indicator whether the consensus engine is running or not.
 	newTxs  int32 // New arrival transaction count since last sealing work submitting.
