@@ -64,9 +64,9 @@ type Miner struct {
 	txFeeRecipient common.Address
 	eth            Backend
 	engine         consensus.Engine
-	exitCh         chan struct{}
-	startCh        chan common.Address
+	startCh        chan struct{}
 	stopCh         chan struct{}
+	exitCh         chan struct{}
 	db             ethdb.Database // Needed for randomness
 
 }
@@ -76,9 +76,9 @@ func New(eth Backend, config *Config, chainConfig *params.ChainConfig, mux *even
 		eth:     eth,
 		mux:     mux,
 		engine:  engine,
-		exitCh:  make(chan struct{}),
-		startCh: make(chan common.Address),
+		startCh: make(chan struct{}),
 		stopCh:  make(chan struct{}),
+		exitCh:  make(chan struct{}),
 		worker:  newWorker(config, chainConfig, engine, eth, mux, isLocalBlock, db, true),
 		db:      db,
 	}
@@ -188,7 +188,7 @@ func (miner *Miner) update() {
 func (miner *Miner) Start(validator common.Address, txFeeRecipient common.Address) {
 	miner.SetValidator(validator)
 	miner.SetTxFeeRecipient(txFeeRecipient)
-	miner.startCh <- validator
+	miner.startCh <- struct{}{}
 }
 
 func (miner *Miner) Stop() {
