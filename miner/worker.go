@@ -87,7 +87,7 @@ type worker struct {
 	engine      IstanbulSealer
 	chain       *core.BlockChain
 	db          ethdb.Database // Needed for randomness
-	eth         Backend        // for eth.TxPool()
+	eth         Backend        // for eth.TxPool() (gets the chain early on)
 
 	// Validator Info
 	mu             sync.RWMutex // The lock used to protect the validator, txFeeRecipient and extra fields

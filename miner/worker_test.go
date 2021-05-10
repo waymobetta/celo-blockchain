@@ -26,7 +26,7 @@ import (
 	"github.com/celo-org/celo-blockchain/common"
 	"github.com/celo-org/celo-blockchain/consensus"
 	"github.com/celo-org/celo-blockchain/consensus/consensustest"
-	mockEngine "github.com/celo-org/celo-blockchain/consensus/consensustest"
+	// mockEngine "github.com/celo-org/celo-blockchain/consensus/consensustest"
 	"github.com/celo-org/celo-blockchain/consensus/istanbul"
 	"github.com/celo-org/celo-blockchain/consensus/istanbul/backend"
 	istanbulBackend "github.com/celo-org/celo-blockchain/consensus/istanbul/backend"
@@ -187,7 +187,6 @@ func newTestWorker(t *testing.T, chainConfig *params.ChainConfig, engine consens
 }
 
 func TestGenerateBlockAndImport(t *testing.T) {
-	t.Skip("this test tends to time out. Something to do with removing the ticker for mainLoop.")
 	var (
 		engine      consensus.Istanbul
 		chainConfig *params.ChainConfig
@@ -196,7 +195,7 @@ func TestGenerateBlockAndImport(t *testing.T) {
 	chainConfig = params.IstanbulTestChainConfig
 	engine = getAuthorizedIstanbulEngine()
 
-	w, b := newTestWorker(t, chainConfig, engine, db, 0, true)
+	w, b := newTestWorker(t, chainConfig, engine, db, 0, false)
 	defer w.close()
 
 	// This test chain imports the mined blocks.
@@ -218,8 +217,10 @@ func TestGenerateBlockAndImport(t *testing.T) {
 	w.start()
 
 	for i := 0; i < 5; i++ {
-		b.txPool.AddLocal(b.newRandomTx(true))
-		b.txPool.AddLocal(b.newRandomTx(false))
+		if i > 3 {
+			b.txPool.AddLocal(b.newRandomTx(true))
+			b.txPool.AddLocal(b.newRandomTx(false))
+		}
 		select {
 		case ev := <-sub.Chan():
 			block := ev.Data.(core.NewMinedBlockEvent).Block
