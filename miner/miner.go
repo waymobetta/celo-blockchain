@@ -211,20 +211,6 @@ func (miner *Miner) SetExtra(extra []byte) error {
 	return nil
 }
 
-// Pending returns the currently pending block and associated state.
-func (miner *Miner) Pending() (*types.Block, *state.StateDB) {
-	return miner.worker.pending()
-}
-
-// PendingBlock returns the currently pending block.
-//
-// Note, to access both the pending block and the pending state
-// simultaneously, please use Pending(), as the pending state can
-// change between multiple method calls
-func (miner *Miner) PendingBlock() *types.Block {
-	return miner.worker.pendingBlock()
-}
-
 // SetValidator sets the miner and worker's address for message and block signing
 func (miner *Miner) SetValidator(addr common.Address) {
 	miner.validator = addr
@@ -237,8 +223,24 @@ func (miner *Miner) SetTxFeeRecipient(addr common.Address) {
 	miner.worker.setTxFeeRecipient(addr)
 }
 
+// TODO: Remove the pending state
+
 // SubscribePendingLogs starts delivering logs from pending transactions
 // to the given channel.
 func (miner *Miner) SubscribePendingLogs(ch chan<- []*types.Log) event.Subscription {
 	return miner.worker.pendingLogsFeed.Subscribe(ch)
+}
+
+// Pending returns the currently pending block and associated state.
+func (miner *Miner) Pending() (*types.Block, *state.StateDB) {
+	return miner.worker.pending()
+}
+
+// PendingBlock returns the currently pending block.
+//
+// Note, to access both the pending block and the pending state
+// simultaneously, please use Pending(), as the pending state can
+// change between multiple method calls
+func (miner *Miner) PendingBlock() *types.Block {
+	return miner.worker.pendingBlock()
 }
