@@ -47,22 +47,26 @@ func (w *worker) runBlockCreationThroughSealing(ctx context.Context) {
 	if remoteTxs != nil {
 		b.commitTransactions(ctx, remoteTxs, w)
 	}
-	submittedTask, err := b.finalizeBlock(w, time.Now())
+	task, err := b.finalizeBlock(w, time.Now())
 	if err != nil {
 		// TODO: fix
 		panic(err)
 	}
 	w.updateSnapshot(b)
-	// Concurrently store task
-	sealHash := w.engine.SealHash(submittedTask.block.Header())
-	w.pendingMu.Lock()
-	w.pendingTasks[sealHash] = submittedTask
-	w.pendingMu.Unlock()
+
+	sealCtx, cancel := context.WithCancel(ctx)
+	task.cancel = cancel
 
 	// Tie this seal request to the context
-	if err := w.engine.Seal(w.chain, submittedTask.block, w.resultCh, ctx.Done()); err != nil {
+	if err := w.engine.Seal(w.chain, task.block, w.resultCh, sealCtx.Done()); err != nil {
 		log.Warn("Block sealing failed", "err", err)
 	}
+
+	// Concurrently store task
+	sealHash := w.engine.SealHash(task.block.Header())
+	w.pendingMu.Lock()
+	w.pendingTasks[sealHash] = task
+	w.pendingMu.Unlock()
 
 }
 

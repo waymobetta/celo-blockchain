@@ -58,6 +58,8 @@ type task struct {
 	state     *state.StateDB
 	block     *types.Block
 	createdAt time.Time
+	cancel    context.CancelFunc // call to abort engine.Seal for this request
+
 }
 
 // blockState is the state associated with an in flight block.
