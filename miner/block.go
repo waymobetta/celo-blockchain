@@ -278,17 +278,25 @@ func generateTransactionLists(txPool TxPool, w *worker) (localTxs, remoteTxs *ty
 
 // finalizeBlock runs any post-transaction state modifications and assembles the final block.
 func (b *blockState) finalizeBlock(w *worker, start time.Time) (*task, error) {
-	block, err := w.engine.FinalizeAndAssemble(w.chain, b.header, b.state, b.txs, b.receipts, b.randomness)
+	// Deep copy receipts here to avoid interaction between different tasks.
+	receipts := make([]*types.Receipt, len(b.receipts))
+	for i, l := range b.receipts {
+		receipts[i] = new(types.Receipt)
+		*receipts[i] = *l
+	}
+	state := b.state.Copy()
+
+	block, err := w.engine.FinalizeAndAssemble(w.chain, b.header, state, b.txs, b.receipts, b.randomness)
 
 	// Set the validator set diff in the new header if we're using Istanbul and it's the last block of the epoch
-	if err := w.engine.UpdateValSetDiff(w.chain, block.MutableHeader(), b.state); err != nil {
+	if err := w.engine.UpdateValSetDiff(w.chain, block.MutableHeader(), state); err != nil {
 		log.Error("Unable to update Validator Set Diff", "err", err)
 		return nil, err
 	}
 
 	if len(b.state.GetLogs(common.Hash{})) > 0 {
 		receipt := types.NewReceipt(nil, false, 0)
-		receipt.Logs = b.state.GetLogs(common.Hash{})
+		receipt.Logs = state.GetLogs(common.Hash{})
 		for i := range receipt.Logs {
 			receipt.Logs[i].TxIndex = uint(len(b.receipts))
 		}
@@ -310,5 +318,5 @@ func (b *blockState) finalizeBlock(w *worker, start time.Time) (*task, error) {
 	log.Info("Created a new block to submit to consensus", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
 		"txs", b.tcount, "gas", block.GasUsed(), "fees", feesEth, "elapsed", common.PrettyDuration(time.Since(start)))
 
-	return &task{receipts: b.receipts, state: b.state, block: block, createdAt: time.Now()}, nil
+	return &task{receipts: b.receipts, state: state, block: block, createdAt: time.Now()}, nil
 }
