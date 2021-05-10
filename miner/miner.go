@@ -59,8 +59,11 @@ type Config struct {
 // Miner creates blocks and searches for proof-of-work values.
 type Miner struct {
 	worker *worker
-	engine consensus.Istanbul
-	eth    Backend
+	// For recover randomness
+	engine    consensus.Istanbul
+	eth       Backend
+	validator common.Address
+	db        ethdb.Database
 
 	startCh chan struct{}
 	stopCh  chan struct{}
@@ -70,14 +73,16 @@ type Miner struct {
 func New(eth Backend, config *Config, chainConfig *params.ChainConfig, mux *event.TypeMux, engine consensus.Engine, isLocalBlock func(block *types.Block) bool, db ethdb.Database) *Miner {
 	istEngine := engine.(consensus.Istanbul)
 	miner := &Miner{
-		eth:     eth,
-		engine:  istEngine,
-		startCh: make(chan struct{}),
-		stopCh:  make(chan struct{}),
-		exitCh:  make(chan struct{}),
-		worker:  newWorker(config, chainConfig, istEngine, eth, mux, db),
+		eth:       eth,
+		engine:    istEngine,
+		validator: config.Validator,
+		db:        db,
+		startCh:   make(chan struct{}),
+		stopCh:    make(chan struct{}),
+		exitCh:    make(chan struct{}),
+		worker:    newWorker(config, chainConfig, istEngine, eth, mux, db),
 	}
-	go miner.update()
+	go miner.update(mux)
 
 	return miner
 }
@@ -122,8 +127,8 @@ func (miner *Miner) recoverRandomnessCache() {
 // It's entered once and as soon as `Done` or `Failed` has been broadcasted the events are unregistered and
 // the loop is exited. This to prevent a major security vuln where external parties can DOS you with blocks
 // and halt your mining operation for as long as the DOS continues.
-func (miner *Miner) update() {
-	events := miner.mux.Subscribe(downloader.StartEvent{}, downloader.DoneEvent{}, downloader.FailedEvent{})
+func (miner *Miner) update(mux *event.TypeMux) {
+	events := mux.Subscribe(downloader.StartEvent{}, downloader.DoneEvent{}, downloader.FailedEvent{})
 	defer func() {
 		if !events.Closed() {
 			events.Unsubscribe()
