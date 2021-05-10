@@ -25,29 +25,15 @@ import (
 	"time"
 
 	"github.com/celo-org/celo-blockchain/common"
-	"github.com/celo-org/celo-blockchain/consensus"
 	"github.com/celo-org/celo-blockchain/core"
 	"github.com/celo-org/celo-blockchain/core/types"
 	"github.com/celo-org/celo-blockchain/log"
 )
 
 // Note: the context must be cancelled to close engine.Seal
-func (worker *worker) runBlockCreationThroughToInsertion(ctx context.Context) {
+func (w *worker) runBlockCreationThroughToInsertion(ctx context.Context) {
 	fmt.Println("starting block creation")
-	istanbul := worker.engine.(consensus.Istanbul)
-	c := &chainState{
-		signer:      types.NewEIP155Signer(worker.chainConfig.ChainID),
-		chainConfig: worker.chainConfig,
-		engine:      istanbul,
-		chain:       worker.chain,
-		db:          worker.db,
-	}
-	w := &workerState{
-		validator:      worker.validator,
-		txFeeRecipient: worker.txFeeRecipient,
-		extra:          worker.extra,
-	}
-	b, _ := newBlockState(c, w, time.Now().Unix())
+	b, _ := newBlockState(w, time.Now().Unix())
 	// newBlockState sleeps, so put a cancel point here
 	select {
 	case <-ctx.Done():
@@ -57,31 +43,31 @@ func (worker *worker) runBlockCreationThroughToInsertion(ctx context.Context) {
 	}
 	fmt.Println("built new block")
 
-	localTxs, remoteTxs := generateTransactionLists(worker.eth.TxPool(), c)
+	localTxs, remoteTxs := generateTransactionLists(w.eth.TxPool(), w)
 	// Each round of tx commit is also a cancel point
 	if localTxs != nil {
-		b.commitTransactions(ctx, localTxs, c, w)
+		b.commitTransactions(ctx, localTxs, w)
 	}
 	if remoteTxs != nil {
-		b.commitTransactions(ctx, remoteTxs, c, w)
+		b.commitTransactions(ctx, remoteTxs, w)
 	}
 	fmt.Println("added transactions")
-	submittedTask, err := b.finalizeBlock(c, time.Now())
+	submittedTask, err := b.finalizeBlock(w, time.Now())
 	if err != nil {
 		// TODO: fix
 		panic(err)
 	}
 	fmt.Println("finalized block")
-	worker.updateSnapshot(b)
+	w.updateSnapshot(b)
 	// Concurrently store task
-	sealHash := c.engine.SealHash(submittedTask.block.Header())
-	worker.pendingMu.Lock()
-	worker.pendingTasks[sealHash] = submittedTask
-	worker.pendingMu.Unlock()
+	sealHash := w.engine.SealHash(submittedTask.block.Header())
+	w.pendingMu.Lock()
+	w.pendingTasks[sealHash] = submittedTask
+	w.pendingMu.Unlock()
 
 	resultCh := make(chan *types.Block)
 	// Tie this seal request to the context
-	if err := c.engine.Seal(c.chain, submittedTask.block, resultCh, ctx.Done()); err != nil {
+	if err := w.engine.Seal(w.chain, submittedTask.block, resultCh, ctx.Done()); err != nil {
 		log.Warn("Block sealing failed", "err", err)
 	}
 
@@ -93,16 +79,16 @@ func (worker *worker) runBlockCreationThroughToInsertion(ctx context.Context) {
 	select {
 	case block := <-resultCh:
 		fmt.Println("Received block from the result channel")
-		sealhash := c.engine.SealHash(block.Header())
-		worker.pendingMu.RLock()
-		task, exist := worker.pendingTasks[sealhash]
-		worker.pendingMu.RUnlock()
+		sealhash := w.engine.SealHash(block.Header())
+		w.pendingMu.RLock()
+		task, exist := w.pendingTasks[sealhash]
+		w.pendingMu.RUnlock()
 		if !exist {
 			log.Error("Block found but no relative pending task", "number", block.Number(), "sealhash", sealhash, "hash", block.Hash())
 			return
 		}
 		fmt.Println("will insert block")
-		worker.insertBlock(block, task)
+		w.insertBlock(block, task)
 	case <-ctx.Done():
 		fmt.Println("run block creation context cancelled at end")
 	}

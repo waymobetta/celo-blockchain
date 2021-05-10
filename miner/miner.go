@@ -58,17 +58,11 @@ type Config struct {
 
 // Miner creates blocks and searches for proof-of-work values.
 type Miner struct {
-	mux            *event.TypeMux
-	worker         *worker
-	validator      common.Address
-	txFeeRecipient common.Address
-	eth            Backend
-	engine         consensus.Engine
-	startCh        chan struct{}
-	stopCh         chan struct{}
-	exitCh         chan struct{}
-	db             ethdb.Database // Needed for randomness
+	worker *worker
 
+	startCh chan struct{}
+	stopCh  chan struct{}
+	exitCh  chan struct{}
 }
 
 func New(eth Backend, config *Config, chainConfig *params.ChainConfig, mux *event.TypeMux, engine consensus.Engine, isLocalBlock func(block *types.Block) bool, db ethdb.Database) *Miner {
@@ -222,8 +216,6 @@ func (miner *Miner) SetTxFeeRecipient(addr common.Address) {
 	miner.txFeeRecipient = addr
 	miner.worker.setTxFeeRecipient(addr)
 }
-
-// TODO: Remove the pending state
 
 // SubscribePendingLogs starts delivering logs from pending transactions
 // to the given channel.

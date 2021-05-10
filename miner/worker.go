@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"math/big"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/celo-org/celo-blockchain/common"
@@ -61,44 +60,42 @@ type task struct {
 	createdAt time.Time
 }
 
-const (
-	commitInterruptNone int32 = iota
-	commitInterruptNewHead
-	commitInterruptResubmit
-)
+// blockState is the state associated with an in flight block.
+// It is not thread safe, and should only be used once.
+type blockState struct {
+	state    *state.StateDB // apply state changes here
+	tcount   int            // tx count in cycle
+	gasPool  *core.GasPool  // available gas used to pack transactions
+	gasLimit uint64
 
-// newWorkReq represents a request for new sealing work submitting with relative interrupt notifier.
-type newWorkReq struct {
-	interrupt *int32
-	noempty   bool
-	timestamp int64
+	header     *types.Header
+	txs        []*types.Transaction
+	receipts   []*types.Receipt
+	randomness *types.Randomness // The types.Randomness of the last block by mined by this worker.
 }
 
 // worker is the main object which takes care of submitting new work to consensus engine
 // and gathering the sealing result.
 type worker struct {
-	config      *Config
+	signer      types.Signer // Used to check the signature, not to sign. Could create just once?
 	chainConfig *params.ChainConfig
-	engine      consensus.Engine
-	eth         Backend
+	engine      consensus.Istanbul
 	chain       *core.BlockChain
+	db          ethdb.Database // Needed for randomness
+	eth         Backend        // for eth.TxPool()
 
 	// Feeds
 	pendingLogsFeed event.Feed
 
 	// Subscriptions
 	mux          *event.TypeMux
-	txsCh        chan core.NewTxsEvent
-	txsSub       event.Subscription
 	chainHeadCh  chan core.ChainHeadEvent
 	chainHeadSub event.Subscription
 
 	// Channels
-	newWorkCh chan *newWorkReq
-	taskCh    chan *task
-	resultCh  chan *types.Block
-	startCh   chan struct{}
-	exitCh    chan struct{}
+	resultCh chan *types.Block
+	startCh  chan struct{}
+	exitCh   chan struct{}
 
 	mu             sync.RWMutex // The lock used to protect the validator, txFeeRecipient and extra fields
 	validator      common.Address
@@ -113,52 +110,26 @@ type worker struct {
 	snapshotState *state.StateDB
 
 	// atomic status counters
-	running int32 // The indicator whether the consensus engine is running or not.
-	newTxs  int32 // New arrival transaction count since last sealing work submitting.
-
-	// noempty is the flag used to control whether the feature of pre-seal empty
-	// block is enabled. The default value is false(pre-seal is enabled by default).
-	// But in some special scenario the consensus engine will seal blocks instantaneously,
-	// in this case this feature will add all empty blocks into canonical chain
-	// non-stop and no real transaction will be included.
-	noempty uint32
-
-	// External functions
-	isLocalBlock func(block *types.Block) bool // Function used to determine whether the specified block is mined by local miner.
-
-	// Test hooks
-	newTaskHook  func(*task)      // Method to call upon receiving a new sealing task.
-	skipSealHook func(*task) bool // Method to decide whether skipping the sealing.
-	fullTaskHook func()           // Method to call before pushing the full sealing task.
-
-	// Needed for randomness
-	db ethdb.Database
+	running bool // The indicator whether the consensus engine is running or not.
 
 	blockConstructGauge metrics.Gauge
 }
 
-func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus.Engine, eth Backend, mux *event.TypeMux, isLocalBlock func(*types.Block) bool, db ethdb.Database, init bool) *worker {
+func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus.Istanbul, eth Backend, mux *event.TypeMux, db ethdb.Database, init bool) *worker {
 	worker := &worker{
-		config:              config,
 		chainConfig:         chainConfig,
 		engine:              engine,
 		eth:                 eth,
 		mux:                 mux,
 		chain:               eth.BlockChain(),
-		isLocalBlock:        isLocalBlock,
 		pendingTasks:        make(map[common.Hash]*task),
-		txsCh:               make(chan core.NewTxsEvent, txChanSize),
 		chainHeadCh:         make(chan core.ChainHeadEvent, chainHeadChanSize),
-		newWorkCh:           make(chan *newWorkReq),
-		taskCh:              make(chan *task),
 		resultCh:            make(chan *types.Block, resultQueueSize),
 		exitCh:              make(chan struct{}),
 		startCh:             make(chan struct{}, 1),
 		db:                  db,
 		blockConstructGauge: metrics.NewRegisteredGauge("miner/worker/block_construct", nil),
 	}
-	// Subscribe NewTxsEvent for tx pool
-	worker.txsSub = eth.TxPool().SubscribeNewTxsEvent(worker.txsCh)
 	// Subscribe events for blockchain
 	worker.chainHeadSub = eth.BlockChain().SubscribeChainHeadEvent(worker.chainHeadCh)
 
@@ -268,7 +239,7 @@ func (w *worker) pendingBlock() *types.Block {
 
 // start sets the running status as 1 and triggers new work submitting.
 func (w *worker) start() {
-	atomic.StoreInt32(&w.running, 1)
+	w.running = true
 	w.startCh <- struct{}{}
 
 	if istanbul, ok := w.engine.(consensus.Istanbul); ok {
@@ -287,7 +258,7 @@ func (w *worker) start() {
 
 // stop sets the running status as 0.
 func (w *worker) stop() {
-	atomic.StoreInt32(&w.running, 0)
+	w.running = false
 
 	if istanbul, ok := w.engine.(consensus.Istanbul); ok {
 		istanbul.StopValidating()
@@ -296,13 +267,13 @@ func (w *worker) stop() {
 
 // isRunning returns an indicator whether worker is running or not.
 func (w *worker) isRunning() bool {
-	return atomic.LoadInt32(&w.running) == 1
+	return w.running
 }
 
 // close terminates all background threads maintained by the worker.
 // Note the worker does not support being closed multiple times.
 func (w *worker) close() {
-	atomic.StoreInt32(&w.running, 0)
+	w.running = false
 	close(w.exitCh)
 }
 

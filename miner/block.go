@@ -25,48 +25,14 @@ import (
 	"time"
 
 	"github.com/celo-org/celo-blockchain/common"
-	"github.com/celo-org/celo-blockchain/consensus"
 	"github.com/celo-org/celo-blockchain/contract_comm/currency"
 	"github.com/celo-org/celo-blockchain/contract_comm/random"
 	"github.com/celo-org/celo-blockchain/core"
 	"github.com/celo-org/celo-blockchain/core/rawdb"
-	"github.com/celo-org/celo-blockchain/core/state"
 	"github.com/celo-org/celo-blockchain/core/types"
-	"github.com/celo-org/celo-blockchain/ethdb"
 	"github.com/celo-org/celo-blockchain/log"
 	"github.com/celo-org/celo-blockchain/params"
 )
-
-// blockState is the state associated with an in flight block.
-// It is not thread safe, and should only be used once.
-type blockState struct {
-	state    *state.StateDB // apply state changes here
-	tcount   int            // tx count in cycle
-	gasPool  *core.GasPool  // available gas used to pack transactions
-	gasLimit uint64
-
-	header     *types.Header
-	txs        []*types.Transaction
-	receipts   []*types.Receipt
-	randomness *types.Randomness // The types.Randomness of the last block by mined by this worker.
-}
-
-// chainState is a read only collection of state required to create a block.
-type chainState struct {
-	signer      types.Signer // Used to check the signature, not to sign. Could create just once?
-	chainConfig *params.ChainConfig
-	engine      consensus.Istanbul
-	chain       *core.BlockChain
-	db          ethdb.Database // Needed for randomness
-}
-
-// workerState is a collection of worker defined inputs to the block production process.
-// Assumed to be not concurently modified.
-type workerState struct {
-	validator      common.Address
-	txFeeRecipient common.Address
-	extra          []byte
-}
 
 func createTxCmp() func(tx1 *types.Transaction, tx2 *types.Transaction) int {
 	// TODO specify header & state
@@ -78,8 +44,8 @@ func createTxCmp() func(tx1 *types.Transaction, tx2 *types.Transaction) int {
 }
 
 // newBlockState creates a new blockState that is initialized to be able to run transactions on.
-func newBlockState(c *chainState, w *workerState, timestamp int64) (*blockState, error) {
-	parent := c.chain.CurrentBlock()
+func newBlockState(w *worker, timestamp int64) (*blockState, error) {
+	parent := w.chain.CurrentBlock()
 
 	if parent.Time() >= uint64(timestamp) {
 		timestamp = int64(parent.Time() + 1)
@@ -93,7 +59,7 @@ func newBlockState(c *chainState, w *workerState, timestamp int64) (*blockState,
 	}
 
 	txFeeRecipient := w.txFeeRecipient
-	if !c.chainConfig.IsDonut(header.Number) && w.txFeeRecipient != w.validator {
+	if !w.chainConfig.IsDonut(header.Number) && w.txFeeRecipient != w.validator {
 		txFeeRecipient = w.validator
 		log.Warn("TxFeeRecipient and Validator flags set before split etherbase fork is active. Defaulting to the given validator address for the coinbase.")
 	}
@@ -105,12 +71,12 @@ func newBlockState(c *chainState, w *workerState, timestamp int64) (*blockState,
 	header.Coinbase = txFeeRecipient
 
 	// TODO: Don't sleep in engine.Prepare
-	if err := c.engine.Prepare(c.chain, header); err != nil {
+	if err := w.engine.Prepare(w.chain, header); err != nil {
 		log.Error("Failed to prepare header for mining", "err", err)
 		return nil, fmt.Errorf("Failed to prepare header for mining %w", err)
 	}
 
-	state, err := c.chain.StateAt(parent.Root())
+	state, err := w.chain.StateAt(parent.Root())
 	if err != nil {
 		log.Error("Failed to get parent state to create mining context", "err", err)
 		return nil, err
@@ -134,21 +100,21 @@ func newBlockState(c *chainState, w *workerState, timestamp int64) (*blockState,
 
 		lastRandomness := common.Hash{}
 		if (lastCommitment != common.Hash{}) {
-			lastRandomnessParentHash := rawdb.ReadRandomCommitmentCache(c.db, lastCommitment)
+			lastRandomnessParentHash := rawdb.ReadRandomCommitmentCache(w.db, lastCommitment)
 			if (lastRandomnessParentHash == common.Hash{}) {
 				log.Error("Failed to get last randomness cache entry")
 				return nil, err
 			}
 
 			var err error
-			lastRandomness, _, err = c.engine.GenerateRandomness(lastRandomnessParentHash)
+			lastRandomness, _, err = w.engine.GenerateRandomness(lastRandomnessParentHash)
 			if err != nil {
 				log.Error("Failed to generate last randomness", "err", err)
 				return nil, err
 			}
 		}
 
-		_, newCommitment, err := c.engine.GenerateRandomness(env.header.ParentHash)
+		_, newCommitment, err := w.engine.GenerateRandomness(env.header.ParentHash)
 		if err != nil {
 			log.Error("Failed to generate new randomness", "err", err)
 			return nil, err
@@ -170,10 +136,10 @@ func newBlockState(c *chainState, w *workerState, timestamp int64) (*blockState,
 }
 
 // commitTransaction applies a single transaction to blockState.
-func (b *blockState) commitTransaction(tx *types.Transaction, c *chainState, txFeeRecipient common.Address) ([]*types.Log, error) {
+func (b *blockState) commitTransaction(tx *types.Transaction, w *worker) ([]*types.Log, error) {
 	snap := b.state.Snapshot()
 
-	receipt, err := core.ApplyTransaction(c.chainConfig, c.chain, &txFeeRecipient, b.gasPool, b.state, b.header, tx, &b.header.GasUsed, *c.chain.GetVMConfig())
+	receipt, err := core.ApplyTransaction(w.chainConfig, w.chain, &w.txFeeRecipient, b.gasPool, b.state, b.header, tx, &b.header.GasUsed, *w.chain.GetVMConfig())
 	if err != nil {
 		b.state.RevertToSnapshot(snap)
 		return nil, err
@@ -185,7 +151,7 @@ func (b *blockState) commitTransaction(tx *types.Transaction, c *chainState, txF
 }
 
 // commitTransactions applies the transactions to blockState until the block is full our there are no more transactions.
-func (b *blockState) commitTransactions(ctx context.Context, txs *types.TransactionsByPriceAndNonce, c *chainState, w *workerState) {
+func (b *blockState) commitTransactions(ctx context.Context, txs *types.TransactionsByPriceAndNonce, w *worker) {
 	var coalescedLogs []*types.Log
 	for {
 		select {
@@ -217,11 +183,11 @@ func (b *blockState) commitTransactions(ctx context.Context, txs *types.Transact
 		// during transaction acceptance is the transaction pool.
 		//
 		// We use the eip155 signer regardless of the current hf.
-		from, _ := types.Sender(c.signer, tx)
+		from, _ := types.Sender(w.signer, tx)
 		// Check whether the tx is replay protected. If we're not in the EIP155 hf
 		// phase, start ignoring the sender until we do.
-		if tx.Protected() && !c.chainConfig.IsEIP155(b.header.Number) {
-			log.Trace("Ignoring reply protected transaction", "hash", tx.Hash(), "eip155", c.chainConfig.EIP155Block)
+		if tx.Protected() && !w.chainConfig.IsEIP155(b.header.Number) {
+			log.Trace("Ignoring reply protected transaction", "hash", tx.Hash(), "eip155", w.chainConfig.EIP155Block)
 
 			txs.Pop()
 			continue
@@ -229,7 +195,7 @@ func (b *blockState) commitTransactions(ctx context.Context, txs *types.Transact
 		// Start executing the transaction
 		b.state.Prepare(tx.Hash(), common.Hash{}, b.tcount)
 
-		logs, err := b.commitTransaction(tx, c, w.txFeeRecipient)
+		logs, err := b.commitTransaction(tx, w)
 		switch {
 		case errors.Is(err, core.ErrGasLimitReached):
 			// Pop the current out-of-gas transaction without shifting in the next from the account
@@ -274,7 +240,7 @@ type TxPool interface {
 }
 
 // generateTransactionLists creates the potentially nil localTx & remoteTx sorted lists for transaction selection.
-func generateTransactionLists(txPool TxPool, c *chainState) (localTxs, remoteTxs *types.TransactionsByPriceAndNonce) {
+func generateTransactionLists(txPool TxPool, w *worker) (localTxs, remoteTxs *types.TransactionsByPriceAndNonce) {
 	pending, err := txPool.Pending()
 	if err != nil {
 		log.Error("Failed to fetch pending transactions", "err", err)
@@ -297,20 +263,20 @@ func generateTransactionLists(txPool TxPool, c *chainState) (localTxs, remoteTxs
 	txComparator := createTxCmp()
 	// Create the transaction heaps
 	if len(localTxMap) > 0 {
-		localTxs = types.NewTransactionsByPriceAndNonce(c.signer, localTxMap, txComparator)
+		localTxs = types.NewTransactionsByPriceAndNonce(w.signer, localTxMap, txComparator)
 	}
 	if len(remoteTxMap) > 0 {
-		remoteTxs = types.NewTransactionsByPriceAndNonce(c.signer, remoteTxMap, txComparator)
+		remoteTxs = types.NewTransactionsByPriceAndNonce(w.signer, remoteTxMap, txComparator)
 	}
 	return localTxs, remoteTxs
 }
 
 // finalizeBlock runs any post-transaction state modifications and assembles the final block.
-func (b *blockState) finalizeBlock(c *chainState, start time.Time) (*task, error) {
-	block, err := c.engine.FinalizeAndAssemble(c.chain, b.header, b.state, b.txs, b.receipts, b.randomness)
+func (b *blockState) finalizeBlock(w *worker, start time.Time) (*task, error) {
+	block, err := w.engine.FinalizeAndAssemble(w.chain, b.header, b.state, b.txs, b.receipts, b.randomness)
 
 	// Set the validator set diff in the new header if we're using Istanbul and it's the last block of the epoch
-	if err := c.engine.UpdateValSetDiff(c.chain, block.MutableHeader(), b.state); err != nil {
+	if err := w.engine.UpdateValSetDiff(w.chain, block.MutableHeader(), b.state); err != nil {
 		log.Error("Unable to update Validator Set Diff", "err", err)
 		return nil, err
 	}
@@ -336,7 +302,7 @@ func (b *blockState) finalizeBlock(c *chainState, start time.Time) (*task, error
 	}
 	feesEth := new(big.Float).Quo(new(big.Float).SetInt(feesWei), new(big.Float).SetInt(big.NewInt(params.Ether)))
 
-	log.Info("Created a new block to submit to consensus", "number", block.Number(), "sealhash", c.engine.SealHash(block.Header()),
+	log.Info("Created a new block to submit to consensus", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
 		"txs", b.tcount, "gas", block.GasUsed(), "fees", feesEth, "elapsed", common.PrettyDuration(time.Since(start)))
 
 	return &task{receipts: b.receipts, state: b.state, block: block, createdAt: time.Now()}, nil
