@@ -37,16 +37,8 @@ import (
 const (
 	// resultQueueSize is the size of channel listening to sealing result.
 	resultQueueSize = 10
-
-	// txChanSize is the size of channel listening to NewTxsEvent.
-	// The number is referenced from the size of tx pool.
-	txChanSize = 4096
-
 	// chainHeadChanSize is the size of channel listening to ChainHeadEvent.
 	chainHeadChanSize = 10
-
-	// staleThreshold is the maximum depth of the acceptable stale block.
-	staleThreshold = 7
 )
 
 // Gauge used to measure block finalization time from created to after written to chain.
