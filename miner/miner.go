@@ -59,6 +59,8 @@ type Config struct {
 // Miner creates blocks and searches for proof-of-work values.
 type Miner struct {
 	worker *worker
+	engine consensus.Istanbul
+	eth    Backend
 
 	startCh chan struct{}
 	stopCh  chan struct{}
@@ -66,15 +68,14 @@ type Miner struct {
 }
 
 func New(eth Backend, config *Config, chainConfig *params.ChainConfig, mux *event.TypeMux, engine consensus.Engine, isLocalBlock func(block *types.Block) bool, db ethdb.Database) *Miner {
+	istEngine := engine.(consensus.Istanbul)
 	miner := &Miner{
 		eth:     eth,
-		mux:     mux,
-		engine:  engine,
+		engine:  istEngine,
 		startCh: make(chan struct{}),
 		stopCh:  make(chan struct{}),
 		exitCh:  make(chan struct{}),
-		worker:  newWorker(config, chainConfig, engine, eth, mux, isLocalBlock, db, true),
-		db:      db,
+		worker:  newWorker(config, chainConfig, istEngine, eth, mux, db),
 	}
 	go miner.update()
 
@@ -207,13 +208,11 @@ func (miner *Miner) SetExtra(extra []byte) error {
 
 // SetValidator sets the miner and worker's address for message and block signing
 func (miner *Miner) SetValidator(addr common.Address) {
-	miner.validator = addr
 	miner.worker.setValidator(addr)
 }
 
 // SetTxFeeRecipient sets the address where the miner and worker will receive fees
 func (miner *Miner) SetTxFeeRecipient(addr common.Address) {
-	miner.txFeeRecipient = addr
 	miner.worker.setTxFeeRecipient(addr)
 }
 

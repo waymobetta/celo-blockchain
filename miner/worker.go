@@ -77,12 +77,19 @@ type blockState struct {
 // worker is the main object which takes care of submitting new work to consensus engine
 // and gathering the sealing result.
 type worker struct {
-	signer      types.Signer // Used to check the signature, not to sign. Could create just once?
+	// Chain state info
+	signer      types.Signer // Used to check the signature, not to sign
 	chainConfig *params.ChainConfig
 	engine      consensus.Istanbul
 	chain       *core.BlockChain
 	db          ethdb.Database // Needed for randomness
 	eth         Backend        // for eth.TxPool()
+
+	// Validator Info
+	mu             sync.RWMutex // The lock used to protect the validator, txFeeRecipient and extra fields
+	validator      common.Address
+	txFeeRecipient common.Address
+	extra          []byte
 
 	// Feeds
 	pendingLogsFeed event.Feed
@@ -97,11 +104,6 @@ type worker struct {
 	startCh  chan struct{}
 	exitCh   chan struct{}
 
-	mu             sync.RWMutex // The lock used to protect the validator, txFeeRecipient and extra fields
-	validator      common.Address
-	txFeeRecipient common.Address
-	extra          []byte
-
 	pendingMu    sync.RWMutex
 	pendingTasks map[common.Hash]*task
 
@@ -109,92 +111,61 @@ type worker struct {
 	snapshotBlock *types.Block
 	snapshotState *state.StateDB
 
-	// atomic status counters
-	running bool // The indicator whether the consensus engine is running or not.
+	running         bool // The indicator whether the consensus engine is running or not.
+	validatorCancel context.CancelFunc
 
 	blockConstructGauge metrics.Gauge
 }
 
-func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus.Istanbul, eth Backend, mux *event.TypeMux, db ethdb.Database, init bool) *worker {
+func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus.Istanbul, eth Backend, mux *event.TypeMux, db ethdb.Database) *worker {
 	worker := &worker{
-		chainConfig:         chainConfig,
-		engine:              engine,
-		eth:                 eth,
-		mux:                 mux,
-		chain:               eth.BlockChain(),
+		signer:      types.NewEIP155Signer(chainConfig.ChainID),
+		chainConfig: chainConfig,
+		engine:      engine,
+		chain:       eth.BlockChain(),
+		db:          db,
+		eth:         eth,
+
+		validator: config.Validator,
+		// txFeeRecipient: config.TxFeeRecipient, // TODO: make this part of the config
+		extra: config.ExtraData,
+
+		mux:         mux,
+		chainHeadCh: make(chan core.ChainHeadEvent, chainHeadChanSize),
+
+		resultCh: make(chan *types.Block, resultQueueSize),
+		exitCh:   make(chan struct{}),
+		startCh:  make(chan struct{}, 1),
+
 		pendingTasks:        make(map[common.Hash]*task),
-		chainHeadCh:         make(chan core.ChainHeadEvent, chainHeadChanSize),
-		resultCh:            make(chan *types.Block, resultQueueSize),
-		exitCh:              make(chan struct{}),
-		startCh:             make(chan struct{}, 1),
-		db:                  db,
 		blockConstructGauge: metrics.NewRegisteredGauge("miner/worker/block_construct", nil),
 	}
 	// Subscribe events for blockchain
 	worker.chainHeadSub = eth.BlockChain().SubscribeChainHeadEvent(worker.chainHeadCh)
 
-	// TODO: start/stop worker with this
-	go worker.loop(worker.exitCh)
-
 	return worker
 }
 
 // validator loop is launched when mining begins
-func (w *worker) loop(done <-chan struct{}) {
-	var haveCancel bool
-	var prevCancel context.CancelFunc
+// Note: need to figure out how to cancel everything
+func (w *worker) validatorLoop(ctx context.Context) {
 	for {
 		select {
 		case <-w.startCh:
-			// Cancel current sealing task
-			if haveCancel {
-				prevCancel()
-			}
-			var ctx context.Context
-			ctx, prevCancel = context.WithCancel(context.Background())
-			haveCancel = true
 			// Run the next task
 			w.runBlockCreationThroughToInsertion(ctx)
-		case head := <-w.chainHeadCh:
-			headNumber := head.Block.NumberU64()
-			fmt.Println(headNumber)
+		case <-w.chainHeadCh:
 			// Send FinalCommittedEvent to the IBFT engine
 			if h, ok := w.engine.(consensus.Handler); ok {
 				h.NewWork()
 			}
-			// Cancel current sealing task
-			if haveCancel {
-				prevCancel()
-			}
-			var ctx context.Context
-			ctx, prevCancel = context.WithCancel(context.Background())
-			haveCancel = true
 			// Run the next task
 			w.runBlockCreationThroughToInsertion(ctx)
-		case <-done:
-			if haveCancel {
-				prevCancel()
-			}
+		case <-ctx.Done():
 			return
 		}
 	}
 
-}
-
-// updateSnapshot updates pending snapshot block and state.
-// Note this function assumes the current variable is thread safe.
-func (w *worker) updateSnapshot(b *blockState) {
-	w.snapshotMu.Lock()
-	defer w.snapshotMu.Unlock()
-
-	w.snapshotBlock = types.NewBlock(
-		b.header,
-		b.txs,
-		b.receipts,
-		b.randomness,
-	)
-
-	w.snapshotState = b.state.Copy()
 }
 
 // setValidator sets the validator address that signs messages and commits randomness
@@ -229,6 +200,22 @@ func (w *worker) pending() (*types.Block, *state.StateDB) {
 	return w.snapshotBlock, w.snapshotState.Copy()
 }
 
+// updateSnapshot updates pending snapshot block and state.
+// Note this function assumes the current variable is thread safe.
+func (w *worker) updateSnapshot(b *blockState) {
+	w.snapshotMu.Lock()
+	defer w.snapshotMu.Unlock()
+
+	w.snapshotBlock = types.NewBlock(
+		b.header,
+		b.txs,
+		b.receipts,
+		b.randomness,
+	)
+
+	w.snapshotState = b.state.Copy()
+}
+
 // pendingBlock returns pending block.
 func (w *worker) pendingBlock() *types.Block {
 	// return a snapshot to avoid contention on currentMu mutex
@@ -239,30 +226,33 @@ func (w *worker) pendingBlock() *types.Block {
 
 // start sets the running status as 1 and triggers new work submitting.
 func (w *worker) start() {
+	if w.running {
+		return
+	}
 	w.running = true
 	w.startCh <- struct{}{}
 
-	if istanbul, ok := w.engine.(consensus.Istanbul); ok {
-		istanbul.SetBlockProcessors(w.chain.HasBadBlock,
-			func(block *types.Block, state *state.StateDB) (types.Receipts, []*types.Log, uint64, error) {
-				return w.chain.Processor().Process(block, state, *w.chain.GetVMConfig())
-			},
-			func(block *types.Block, state *state.StateDB, receipts types.Receipts, usedGas uint64) error {
-				return w.chain.Validator().ValidateState(block, state, receipts, usedGas)
-			})
-		if istanbul.IsPrimary() {
-			istanbul.StartValidating()
-		}
+	// TODO: Why is this here?
+	w.engine.SetBlockProcessors(w.chain.HasBadBlock,
+		func(block *types.Block, state *state.StateDB) (types.Receipts, []*types.Log, uint64, error) {
+			return w.chain.Processor().Process(block, state, *w.chain.GetVMConfig())
+		},
+		func(block *types.Block, state *state.StateDB, receipts types.Receipts, usedGas uint64) error {
+			return w.chain.Validator().ValidateState(block, state, receipts, usedGas)
+		})
+	if w.engine.IsPrimary() {
+		w.engine.StartValidating()
 	}
+
 }
 
 // stop sets the running status as 0.
 func (w *worker) stop() {
-	w.running = false
-
-	if istanbul, ok := w.engine.(consensus.Istanbul); ok {
-		istanbul.StopValidating()
+	if !w.running {
+		return
 	}
+	w.running = false
+	w.engine.StopValidating()
 }
 
 // isRunning returns an indicator whether worker is running or not.
@@ -275,12 +265,6 @@ func (w *worker) isRunning() bool {
 func (w *worker) close() {
 	w.running = false
 	close(w.exitCh)
-}
-
-func (w *worker) isIstanbulEngine() bool {
-	// TODO find a better way to do this
-	_, isIstanbul := w.engine.(consensus.Istanbul)
-	return isIstanbul
 }
 
 // copyReceipts makes a deep copy of the given receipts.
